@@ -25,6 +25,10 @@ import org.apache.spark.sql.execution.streaming.state.{AlsoTestWithChangelogChec
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.streaming.util.StreamManualClock
 
+object TransformWithStateSuiteUtils {
+  val NUM_SHUFFLE_PARTITIONS = 5
+}
+
 // Class to verify stateful processor usage without timers
 class RunningCountStatefulProcessor extends StatefulProcessor[String, String, (String, String)]
   with Logging {
@@ -37,15 +41,16 @@ class RunningCountStatefulProcessor extends StatefulProcessor[String, String, (S
     _processorHandle = handle
     assert(handle.getQueryInfo().getBatchId >= 0)
     assert(handle.getQueryInfo().getOperatorId == 0)
-    assert(handle.getQueryInfo().getPartitionId >= 0 && handle.getQueryInfo().getPartitionId < 5)
+    assert(handle.getQueryInfo().getPartitionId >= 0 &&
+      handle.getQueryInfo().getPartitionId < TransformWithStateSuiteUtils.NUM_SHUFFLE_PARTITIONS)
     _countState = _processorHandle.getValueState[Long]("countState")
   }
 
-  override def handleInputRows(
+  override def handleInputRow(
       key: String,
-      inputRows: Iterator[String],
+      inputRow: String,
       timerValues: TimerValues): Iterator[(String, String)] = {
-    val count = _countState.getOption().getOrElse(0L) + inputRows.size
+    val count = _countState.getOption().getOrElse(0L) + 1
     if (count == 3) {
       _countState.remove()
       Iterator.empty
@@ -60,9 +65,9 @@ class RunningCountStatefulProcessor extends StatefulProcessor[String, String, (S
 
 // Class to verify stateful processor usage with adding processing time timers
 class RunningCountStatefulProcessorWithProcTimeTimer extends RunningCountStatefulProcessor {
-  override def handleInputRows(
+  override def handleInputRow(
       key: String,
-      inputRows: Iterator[String],
+      inputRow: String,
       timerValues: TimerValues): Iterator[(String, String)] = {
     val currCount = _countState.getOption().getOrElse(0L)
     if (currCount == 0 && (key == "a" || key == "c")) {
@@ -70,7 +75,7 @@ class RunningCountStatefulProcessorWithProcTimeTimer extends RunningCountStatefu
         + 5000)
     }
 
-    val count = currCount + inputRows.size
+    val count = currCount + 1
     if (count == 3) {
       _countState.remove()
       Iterator.empty
@@ -101,9 +106,9 @@ class RunningCountStatefulProcessorWithAddRemoveProcTimeTimer
     _timerState = _processorHandle.getValueState[Long]("timerState")
   }
 
-  override def handleInputRows(
+  override def handleInputRow(
       key: String,
-      inputRows: Iterator[String],
+      inputRows: String,
       timerValues: TimerValues): Iterator[(String, String)] = {
     val currCount = _countState.getOption().getOrElse(0L)
     val count = currCount + inputRows.size
@@ -137,9 +142,9 @@ class RunningCountStatefulProcessorWithAddRemoveProcTimeTimer
 class RunningCountStatefulProcessorWithError extends RunningCountStatefulProcessor {
   @transient private var _tempState: ValueState[Long] = _
 
-  override def handleInputRows(
+  override def handleInputRow(
       key: String,
-      inputRows: Iterator[String],
+      inputRow: String,
       timerValues: TimerValues): Iterator[(String, String)] = {
     // Trying to create value state here should fail
     _tempState = _processorHandle.getValueState[Long]("tempState")
@@ -157,7 +162,9 @@ class TransformWithStateSuite extends StateStoreMetricsTest
 
   test("transformWithState - streaming with rocksdb and invalid processor should fail") {
     withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
-      classOf[RocksDBStateStoreProvider].getName) {
+      classOf[RocksDBStateStoreProvider].getName,
+      SQLConf.SHUFFLE_PARTITIONS.key ->
+      TransformWithStateSuiteUtils.NUM_SHUFFLE_PARTITIONS.toString) {
       val inputData = MemoryStream[String]
       val result = inputData.toDS()
         .groupByKey(x => x)
@@ -177,7 +184,9 @@ class TransformWithStateSuite extends StateStoreMetricsTest
 
   test("transformWithState - streaming with rocksdb should succeed") {
     withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
-      classOf[RocksDBStateStoreProvider].getName) {
+      classOf[RocksDBStateStoreProvider].getName,
+      SQLConf.SHUFFLE_PARTITIONS.key ->
+      TransformWithStateSuiteUtils.NUM_SHUFFLE_PARTITIONS.toString) {
       val inputData = MemoryStream[String]
       val result = inputData.toDS()
         .groupByKey(x => x)

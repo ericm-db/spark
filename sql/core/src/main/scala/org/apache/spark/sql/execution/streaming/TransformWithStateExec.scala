@@ -118,7 +118,7 @@ case class TransformWithStateExec(
     }
   }
 
-  private def handleInputRows(keyRow: UnsafeRow, valueRowIter: Iterator[InternalRow]):
+  private def handleInputRow(keyRow: UnsafeRow, valueRow: InternalRow):
     Iterator[InternalRow] = {
     val getKeyObj =
       ObjectOperator.deserializeRowToObject(keyDeserializer, groupingAttributes)
@@ -130,10 +130,10 @@ case class TransformWithStateExec(
 
     val keyObj = getKeyObj(keyRow)  // convert key to objects
     ImplicitKeyTracker.setImplicitKey(keyObj)
-    val valueObjIter = valueRowIter.map(getValueObj.apply)
-    val mappedIterator = statefulProcessor.handleInputRows(keyObj, valueObjIter,
+    val valueObj = getValueObj(valueRow)  // convert value to objects
+    val mappedIterator = statefulProcessor.handleInputRow(keyObj, valueObj,
       new TimerValuesImpl(batchTimestampMs, eventTimeWatermarkForLateEvents)).map { obj =>
-        getOutputRow(obj)
+      getOutputRow(obj)
     }
     ImplicitKeyTracker.removeImplicitKey()
     mappedIterator
@@ -143,7 +143,9 @@ case class TransformWithStateExec(
     val groupedIter = GroupedIterator(dataIter, groupingAttributes, child.output)
     val result = groupedIter.flatMap { case (keyRow, valueRowIter) =>
       val keyUnsafeRow = keyRow.asInstanceOf[UnsafeRow]
-      handleInputRows(keyUnsafeRow, valueRowIter)
+      valueRowIter.flatMap { valueRow =>
+        handleInputRow(keyUnsafeRow, valueRow)
+      }
     }
     result
   }
