@@ -21,7 +21,7 @@ import org.apache.spark.SparkException
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.{AnalysisException, SaveMode}
 import org.apache.spark.sql.execution.streaming._
-import org.apache.spark.sql.execution.streaming.state.RocksDBStateStoreProvider
+import org.apache.spark.sql.execution.streaming.state.{AlsoTestWithChangelogCheckpointingEnabled, RocksDBStateStoreProvider}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.streaming.util.StreamManualClock
 
@@ -247,7 +247,8 @@ class RunningCountStatefulProcessorWithError extends RunningCountStatefulProcess
 /**
  * Class that adds tests for transformWithState stateful streaming operator
  */
-class TransformWithStateSuite extends StateStoreMetricsTest {
+class TransformWithStateSuite extends StateStoreMetricsTest
+  with AlsoTestWithChangelogCheckpointingEnabled {
 
   import testImplicits._
 
