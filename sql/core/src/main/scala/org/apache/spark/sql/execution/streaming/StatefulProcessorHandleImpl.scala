@@ -148,9 +148,9 @@ class StatefulProcessorHandleImpl(
       s"expiryTimestampMs=$expiryTimestampMs in current state=$currState")
 
     if (procTimers.exists(expiryTimestampMs)) {
-      logWarning(s"Timer already exists for expiryTimestampMs=$expiryTimestampMs")
+      logWarning(s"Processing time timer already exists for expiryTimestampMs=$expiryTimestampMs")
     } else {
-      logInfo(s"Registering timer with expiryTimestampMs=$expiryTimestampMs")
+      logInfo(s"Registering processing time timer with expiryTimestampMs=$expiryTimestampMs")
       procTimers.add(expiryTimestampMs, true)
     }
   }
@@ -163,9 +163,9 @@ class StatefulProcessorHandleImpl(
       s"expiryTimestampMs=$expiryTimestampMs in current state=$currState")
 
     if (!procTimers.exists(expiryTimestampMs)) {
-      logInfo(s"Timer does not exist for expiryTimestampMs=$expiryTimestampMs")
+      logInfo(s"Processing time timer does not exist for expiryTimestampMs=$expiryTimestampMs")
     } else {
-      logInfo(s"Removing timer with expiryTimestampMs=$expiryTimestampMs")
+      logInfo(s"Removing processing time timer with expiryTimestampMs=$expiryTimestampMs")
       procTimers.remove(expiryTimestampMs)
     }
   }
@@ -183,9 +183,9 @@ class StatefulProcessorHandleImpl(
         s"expiryTimestampMs=$expiryTimestampMs in current state=$currState")
 
     if (eventTimers.exists(expiryTimestampMs)) {
-      logWarning(s"Timer already exists for expiryTimestampMs=$expiryTimestampMs")
+      logWarning(s"Event timer already exists for expiryTimestampMs=$expiryTimestampMs")
     } else {
-      logInfo(s"Registering timer with expiryTimestampMs=$expiryTimestampMs")
+      logInfo(s"Registering event timer with expiryTimestampMs=$expiryTimestampMs")
       eventTimers.add(expiryTimestampMs, true)
     }
   }
@@ -204,9 +204,9 @@ class StatefulProcessorHandleImpl(
         s"expiryTimestampMs=$expiryTimestampMs in current state=$currState")
 
     if (!eventTimers.exists(expiryTimestampMs)) {
-      logInfo(s"Timer does not exist for expiryTimestampMs=$expiryTimestampMs")
+      logInfo(s"Event time timer does not exist for expiryTimestampMs=$expiryTimestampMs")
     } else {
-      logInfo(s"Removing timer with expiryTimestampMs=$expiryTimestampMs")
+      logInfo(s"Removing event time timer with expiryTimestampMs=$expiryTimestampMs")
       eventTimers.remove(expiryTimestampMs)
     }
   }

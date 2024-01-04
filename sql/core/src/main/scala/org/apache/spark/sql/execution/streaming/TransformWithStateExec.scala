@@ -71,7 +71,8 @@ case class TransformWithStateExec(
       case ProcessingTime =>
         true
       case EventTime =>
-        true
+        eventTimeWatermarkForEviction.isDefined &&
+          newInputWatermark > eventTimeWatermarkForEviction.get
       case _ =>
         false
     }
@@ -122,7 +123,8 @@ case class TransformWithStateExec(
           case EventTime =>
             val mi = statefulProcessor.handleEventTimeTimers(tsWithKey.key,
               tsWithKey.expiryTimestampMs,
-              new TimerValuesImpl(batchTimestampMs, eventTimeWatermarkForLateEvents)).map {
+              new TimerValuesImpl(eventTimeWatermarkForEviction,
+                eventTimeWatermarkForLateEvents)).map {
               obj =>
                 getOutputRow(obj)
             }
@@ -188,7 +190,7 @@ case class TransformWithStateExec(
         val eventTimeIter = store
           .iterator(TimerStateUtils.EVENT_TIMERS_STATE_NAME)
         eventTimeIter.flatMap { case rowPair =>
-          handleTimerRows(store, rowPair.key, batchTimestampMs.get)
+          handleTimerRows(store, rowPair.key, eventTimeWatermarkForEviction.get)
         }
       case _ => Iterator.empty
     }
@@ -266,7 +268,12 @@ case class TransformWithStateExec(
       case ProcessingTime =>
         require(batchTimestampMs.nonEmpty)
       case EventTime =>
-        require(batchTimestampMs.nonEmpty)
+        // watermark value has been populated
+        require(eventTimeWatermarkForLateEvents.nonEmpty)
+        require(eventTimeWatermarkForEviction.nonEmpty)
+        // input schema has watermark attribute
+        require(watermarkExpressionForLateEvents.nonEmpty)
+        require(watermarkExpressionForEviction.nonEmpty)
 
       case _ =>
     }
