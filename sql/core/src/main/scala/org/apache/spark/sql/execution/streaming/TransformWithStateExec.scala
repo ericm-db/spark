@@ -184,7 +184,7 @@ case class TransformWithStateExec(
           handleTimerRows(store, rowPair.key, batchTimestampMs.get)
         }
       case EventTime =>
-        assert(batchTimestampMs.isDefined)
+        assert(eventTimeWatermarkForEviction.isDefined)
         store.createColFamilyIfAbsent(TimerStateUtils.EVENT_TIMERS_STATE_NAME, true)
 
         val eventTimeIter = store
