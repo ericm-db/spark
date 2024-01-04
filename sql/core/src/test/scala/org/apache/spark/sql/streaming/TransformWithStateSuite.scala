@@ -21,7 +21,7 @@ import org.apache.spark.SparkException
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.{AnalysisException, SaveMode}
 import org.apache.spark.sql.execution.streaming._
-import org.apache.spark.sql.execution.streaming.state.{AlsoTestWithChangelogCheckpointingEnabled, RocksDBStateStoreProvider}
+import org.apache.spark.sql.execution.streaming.state.RocksDBStateStoreProvider
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.streaming.util.StreamManualClock
 
@@ -139,14 +139,31 @@ class RunningCountStatefulProcessorWithAddRemoveProcTimeTimer
 }
 
 // Class to verify stateful processor usage with adding event time timers
-class RunningCountStatefulProcessorWithEventTimeTimer extends RunningCountStatefulProcessor {
+class RunningCountStatefulProcessorWithEventTimeTimer
+  extends StatefulProcessor[String, (String, java.sql.Timestamp), (String, String)] {
+
+  @transient var _countState: ValueState[Long] = _
+  @transient var _processorHandle: StatefulProcessorHandle = _
+
+  override def init(
+       handle: StatefulProcessorHandle,
+       outputMode: OutputMode): Unit = {
+    _processorHandle = handle
+    assert(handle.getQueryInfo().getBatchId >= 0)
+    assert(handle.getQueryInfo().getOperatorId == 0)
+    assert(handle.getQueryInfo().getPartitionId >= 0 && handle.getQueryInfo().getPartitionId < 5)
+    _countState = _processorHandle.getValueState[Long]("countState")
+  }
+
+  override def close(): Unit = {}
+
   override def handleInputRows(
       key: String,
-      inputRows: Iterator[String],
+      inputRows: Iterator[(String, java.sql.Timestamp)],
       timerValues: TimerValues): Iterator[(String, String)] = {
     val currCount = _countState.getOption().getOrElse(0L)
     if (currCount == 0 && (key == "a" || key == "c")) {
-      _processorHandle.registerEventTimeTimer(timerValues.getCurrentProcessingTimeInMs()
+      _processorHandle.registerEventTimeTimer(timerValues.getCurrentWatermarkInMs()
         + 5000)
     }
 
@@ -171,7 +188,7 @@ class RunningCountStatefulProcessorWithEventTimeTimer extends RunningCountStatef
 
 // Class to verify stateful processor usage with adding/deleting processing time timers
 class RunningCountStatefulProcessorWithAddRemoveEventTimeTimer
-  extends RunningCountStatefulProcessor {
+  extends RunningCountStatefulProcessorWithEventTimeTimer {
   @transient private var _timerState: ValueState[Long] = _
 
   override def init(
@@ -183,7 +200,7 @@ class RunningCountStatefulProcessorWithAddRemoveEventTimeTimer
 
   override def handleInputRows(
       key: String,
-      inputRows: Iterator[String],
+      inputRows: Iterator[(String, java.sql.Timestamp)],
       timerValues: TimerValues): Iterator[(String, String)] = {
     val currCount = _countState.getOption().getOrElse(0L)
     val count = currCount + inputRows.size
@@ -230,8 +247,7 @@ class RunningCountStatefulProcessorWithError extends RunningCountStatefulProcess
 /**
  * Class that adds tests for transformWithState stateful streaming operator
  */
-class TransformWithStateSuite extends StateStoreMetricsTest
-  with AlsoTestWithChangelogCheckpointingEnabled {
+class TransformWithStateSuite extends StateStoreMetricsTest {
 
   import testImplicits._
 
@@ -365,38 +381,35 @@ class TransformWithStateSuite extends StateStoreMetricsTest
     "should succeed") {
     withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
       classOf[RocksDBStateStoreProvider].getName) {
-      val clock = new StreamManualClock
 
-      val inputData = MemoryStream[String]
+      import java.sql.Timestamp
+      val inputData = MemoryStream[(String, Timestamp)]
       val result = inputData.toDS()
-        .groupByKey(x => x)
+        .select($"_1".as("value"), $"_2".as("eventTime"))
+        .withWatermark("eventTime", "1 second")
+        .as[(String, Timestamp)]
+        .groupByKey(x => x._1)
         .transformWithState(new RunningCountStatefulProcessorWithEventTimeTimer(),
           TimeoutMode.EventTime(),
           OutputMode.Update())
 
       testStream(result, OutputMode.Update())(
-        StartStream(Trigger.ProcessingTime("1 second"), triggerClock = clock),
-        AddData(inputData, "a"),
-        AdvanceManualClock(1 * 1000),
-        CheckNewAnswer(("a", "1")),
+        StartStream(),
+        AddData(inputData, ("a",
+          Timestamp.valueOf("2023-08-01 00:00:00"))),
 
-        AddData(inputData, "b"),
-        AdvanceManualClock(1 * 1000),
-        CheckNewAnswer(("b", "1")),
+        AddData(inputData, ("b",
+          Timestamp.valueOf("2023-08-02 00:00:00"))),
+        CheckNewAnswer(("a", "1"), ("a", "-1"), ("b", "1")),
 
-        AddData(inputData, "b"),
-        AdvanceManualClock(10 * 1000),
-        CheckNewAnswer(("a", "-1"), ("b", "2")),
+        AddData(inputData, ("b", Timestamp.valueOf("2023-08-03 00:00:00"))),
+        CheckNewAnswer(("b", "2")), // watermark: 3rd august, timer t1 should have fired,
 
-        StopStream,
-        StartStream(Trigger.ProcessingTime("1 second"), triggerClock = clock),
-        AddData(inputData, "b"),
-        AddData(inputData, "c"),
-        AdvanceManualClock(1 * 1000),
-        CheckNewAnswer(("c", "1")),
-        AddData(inputData, "d"),
-        AdvanceManualClock(10 * 1000),
-        CheckNewAnswer(("c", "-1"), ("d", "1")),
+        AddData(inputData, ("b", Timestamp.valueOf("2023-08-04 00:00:00"))),
+        AddData(inputData, ("c", Timestamp.valueOf("2023-08-04 00:00:00"))),
+        CheckNewAnswer(("c", "-1"), ("c", "1")),
+        AddData(inputData, ("d", Timestamp.valueOf("2023-08-06 00:00:00"))),
+        CheckNewAnswer(("d", "1")),
         StopStream
       )
     }
@@ -408,29 +421,28 @@ class TransformWithStateSuite extends StateStoreMetricsTest
       classOf[RocksDBStateStoreProvider].getName) {
       val clock = new StreamManualClock
 
-      val inputData = MemoryStream[String]
+      import java.sql.Timestamp
+      val inputData = MemoryStream[(String, Timestamp)]
       val result = inputData.toDS()
-        .groupByKey(x => x)
-        .transformWithState(
-          new RunningCountStatefulProcessorWithAddRemoveEventTimeTimer(),
+        .select($"_1".as("value"), $"_2".as("eventTime"))
+        .withWatermark("eventTime", "1 second")
+        .as[(String, Timestamp)]
+        .groupByKey(x => x._1)
+        .transformWithState(new RunningCountStatefulProcessorWithAddRemoveEventTimeTimer(),
           TimeoutMode.EventTime(),
           OutputMode.Update())
 
+
       testStream(result, OutputMode.Update())(
-        StartStream(Trigger.ProcessingTime("1 second"), triggerClock = clock),
-        AddData(inputData, "a"),
-        AdvanceManualClock(1 * 1000),
-        CheckNewAnswer(("a", "1")),
+        StartStream(),
+        AddData(inputData, ("a", Timestamp.valueOf("2023-08-01 00:00:00"))),
+        CheckNewAnswer(("a", "1"), ("a", "-1")),
 
-        AddData(inputData, "a"),
-        AdvanceManualClock(2 * 1000),
-        CheckNewAnswer(("a", "2")),
-        StopStream,
+        AddData(inputData, ("a", Timestamp.valueOf("2023-08-02 00:00:00"))),
+        CheckNewAnswer(("a", "2"), ("a", "-1")),
 
-        StartStream(Trigger.ProcessingTime("1 second"), triggerClock = clock),
-        AddData(inputData, "d"),
-        AdvanceManualClock(10 * 1000),
-        CheckNewAnswer(("a", "-1"), ("d", "1")),
+        AddData(inputData, ("d", Timestamp.valueOf("2023-08-03 00:00:00"))),
+        CheckNewAnswer(("d", "1")),
         StopStream
       )
     }
