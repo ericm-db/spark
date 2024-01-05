@@ -60,10 +60,10 @@ class StatefulProcessorHandleSuite extends SharedSparkSession
   val schemaForValueRow: StructType = new StructType().add("value", BinaryType)
 
   private def newStoreProviderWithHandle(useColumnFamilies: Boolean):
-  RocksDBStateStoreProvider = {
-    newStoreProviderWithHandle(StateStoreId(newDir(), Random.nextInt(), 0),
-      numColsPrefixKey = 0,
-      useColumnFamilies = useColumnFamilies)
+    RocksDBStateStoreProvider = {
+      newStoreProviderWithHandle(StateStoreId(newDir(), Random.nextInt(), 0),
+        numColsPrefixKey = 0,
+        useColumnFamilies = useColumnFamilies)
   }
 
   private def newStoreProviderWithHandle(

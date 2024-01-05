@@ -113,7 +113,7 @@ case class TransformWithStateExec(
           case ProcessingTime =>
             val mi = statefulProcessor.handleProcessingTimeTimers(tsWithKey.key,
               tsWithKey.expiryTimestampMs,
-              new TimerValuesImpl(batchTimestampMs, eventTimeWatermarkForLateEvents)).map {
+              new TimerValuesImpl(batchTimestampMs, eventTimeWatermarkForEviction)).map {
               obj =>
                 getOutputRow(obj)
             }
@@ -123,8 +123,7 @@ case class TransformWithStateExec(
           case EventTime =>
             val mi = statefulProcessor.handleEventTimeTimers(tsWithKey.key,
               tsWithKey.expiryTimestampMs,
-              new TimerValuesImpl(eventTimeWatermarkForEviction,
-                eventTimeWatermarkForLateEvents)).map {
+              new TimerValuesImpl(batchTimestampMs, eventTimeWatermarkForEviction)).map {
               obj =>
                 getOutputRow(obj)
             }

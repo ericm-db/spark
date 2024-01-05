@@ -433,7 +433,6 @@ class TransformWithStateSuite extends StateStoreMetricsTest
           TimeoutMode.EventTime(),
           OutputMode.Update())
 
-
       testStream(result, OutputMode.Update())(
         StartStream(),
         AddData(inputData, ("a", Timestamp.valueOf("2023-08-01 00:00:00"))),
