@@ -998,6 +998,13 @@ class EventTimeWatermarkSuite extends StreamTest with BeforeAndAfter with Matche
     }
   }
 
+  /** Assert event stats generated on that last batch with data in it */
+  def assertWatermark(wtrmark: Long): AssertOnQuery = {
+    assertEventStats { e =>
+      assert(e.get("watermark") === formatTimestamp(wtrmark), s"watermark value mismatch")
+    }
+  }
+
   private val timestampFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'") // ISO8601
   timestampFormat.setTimeZone(ju.TimeZone.getTimeZone(UTC))
 

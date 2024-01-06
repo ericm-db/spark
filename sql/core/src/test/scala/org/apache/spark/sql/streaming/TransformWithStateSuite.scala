@@ -18,6 +18,7 @@
 package org.apache.spark.sql.streaming
 
 import java.sql.Timestamp
+import java.text.SimpleDateFormat
 
 import org.apache.spark.SparkException
 import org.apache.spark.internal.Logging
@@ -396,25 +397,47 @@ class TransformWithStateSuite extends StateStoreMetricsTest
 
       testStream(result, OutputMode.Update())(
         StartStream(),
-        AddData(inputData, ("a",
-          Timestamp.valueOf("2023-08-01 00:00:00"))),
+        AddData(inputData, ("a", Timestamp.valueOf("2023-08-01 00:00:00"))),
 
-        AddData(inputData, ("b",
-          Timestamp.valueOf("2023-08-02 00:00:00"))),
+        AddData(inputData, ("b", Timestamp.valueOf("2023-08-02 00:00:00"))),
         CheckNewAnswer(("a", "1"), ("a", "-1"), ("b", "1")),
+        assertWatermark(Timestamp.valueOf("1970-01-01 00:00:00")),
 
         AddData(inputData, ("b", Timestamp.valueOf("2023-08-03 00:00:00"))),
         CheckNewAnswer(("b", "2")), // watermark: 3rd august, timer t1 should have fired,
+        assertWatermark(Timestamp.valueOf("2023-08-02 06:59:59")),
 
         AddData(inputData, ("b", Timestamp.valueOf("2023-08-04 00:00:00"))),
         AddData(inputData, ("c", Timestamp.valueOf("2023-08-04 00:00:00"))),
         CheckNewAnswer(("c", "-1"), ("c", "1")),
+        assertWatermark(Timestamp.valueOf("2023-08-03 06:59:59")),
+
         AddData(inputData, ("d", Timestamp.valueOf("2023-08-06 00:00:00"))),
         CheckNewAnswer(("d", "1")),
+        assertWatermark(Timestamp.valueOf("2023-08-04 06:59:59")),
         StopStream
       )
     }
   }
+
+  private def assertEventStats(body: java.util.Map[String, String] => Unit): AssertOnQuery = {
+    Execute("AssertEventStats") { q =>
+      body(q.recentProgress.filter(_.numInputRows > 0).lastOption.get.eventTime)
+    }
+  }
+
+  /** Assert event stats generated on that last batch with data in it */
+  def assertWatermark(wtrmark: Timestamp): AssertOnQuery = {
+    assertEventStats { e =>
+      assert(e.get("watermark") === formatTimestamp(wtrmark), s"watermark value mismatch")
+    }
+  }
+
+  private def formatTimestamp(timestamp: Timestamp): String = {
+    timestampFormat.format(timestamp)
+  }
+
+  private val timestampFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'") // ISO8601
 
   test("transformWithState - streaming with rocksdb and event time timer " +
     "and add/remove timers should succeed") {
