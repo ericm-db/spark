@@ -147,10 +147,13 @@ class StatefulProcessorHandleImpl(
     s"Cannot register processing time timer with " +
       s"expiryTimestampMs=$expiryTimestampMs in current state=$currState")
 
+    val queryId = getQueryInfo().getQueryId
     if (procTimers.exists(expiryTimestampMs)) {
-      logWarning(s"Processing time timer already exists for expiryTimestampMs=$expiryTimestampMs")
+      logWarning(s"Processing time timer already exists for expiryTimestampMs=$expiryTimestampMs" +
+        s" and streamingQueryId=$queryId")
     } else {
-      logInfo(s"Registering processing time timer with expiryTimestampMs=$expiryTimestampMs")
+      logInfo(s"Registering processing time timer with expiryTimestampMs=$expiryTimestampMs" +
+        s" and streamingQueryId=$queryId")
       procTimers.add(expiryTimestampMs, true)
     }
   }
@@ -162,10 +165,13 @@ class StatefulProcessorHandleImpl(
     s"Cannot delete processing time timer with " +
       s"expiryTimestampMs=$expiryTimestampMs in current state=$currState")
 
+    val queryId = getQueryInfo().getQueryId
     if (!procTimers.exists(expiryTimestampMs)) {
-      logInfo(s"Processing time timer does not exist for expiryTimestampMs=$expiryTimestampMs")
+      logInfo(s"Processing time timer does not exist for expiryTimestampMs=$expiryTimestampMs" +
+        s" and streamingQueryId=$queryId")
     } else {
-      logInfo(s"Removing processing time timer with expiryTimestampMs=$expiryTimestampMs")
+      logInfo(s"Removing processing time timer with expiryTimestampMs=$expiryTimestampMs" +
+        s" and streamingQueryId=$queryId")
       procTimers.remove(expiryTimestampMs)
     }
   }
@@ -182,10 +188,13 @@ class StatefulProcessorHandleImpl(
       s"Cannot register event time timer with " +
         s"expiryTimestampMs=$expiryTimestampMs in current state=$currState")
 
+    val queryId = getQueryInfo().getQueryId
     if (eventTimers.exists(expiryTimestampMs)) {
-      logWarning(s"Event timer already exists for expiryTimestampMs=$expiryTimestampMs")
+      logWarning(s"Event timer already exists for expiryTimestampMs=$expiryTimestampMs" +
+        s" and streamingQueryId=$queryId")
     } else {
-      logInfo(s"Registering event timer with expiryTimestampMs=$expiryTimestampMs")
+      logInfo(s"Registering event timer with expiryTimestampMs=$expiryTimestampMs" +
+        s" and streamingQueryId=$queryId")
       eventTimers.add(expiryTimestampMs, true)
     }
   }
@@ -203,10 +212,13 @@ class StatefulProcessorHandleImpl(
       s"Cannot delete event time timer with " +
         s"expiryTimestampMs=$expiryTimestampMs in current state=$currState")
 
+    val queryId = getQueryInfo().getQueryId
     if (!eventTimers.exists(expiryTimestampMs)) {
-      logInfo(s"Event time timer does not exist for expiryTimestampMs=$expiryTimestampMs")
+      logInfo(s"Event time timer does not exist for expiryTimestampMs=$expiryTimestampMs" +
+        s" and streamingQueryId=$queryId")
     } else {
-      logInfo(s"Removing event time timer with expiryTimestampMs=$expiryTimestampMs")
+      logInfo(s"Removing event time timer with expiryTimestampMs=$expiryTimestampMs" +
+        s" and streamingQueryId=$queryId")
       eventTimers.remove(expiryTimestampMs)
     }
   }
