@@ -152,6 +152,8 @@ case class TransformWithStateExec(
   override protected def doExecute(): RDD[InternalRow] = {
     metrics // force lazy init at driver
 
+    // populate stateInfo if this is a streaming query
+    val stateInfo = getStateInfo
     child.execute().mapPartitionsWithStateStore[InternalRow](
       getStateInfo,
       schemaForKeyRow,
@@ -170,4 +172,37 @@ case class TransformWithStateExec(
         result
     }
   }
+}
+
+object TransformWithStateExec {
+
+  // Plan logical transformWithState for batch queries
+  def generateSparkPlanForBatchQueries(
+      keyDeserializer: Expression,
+      valueDeserializer: Expression,
+      groupingAttributes: Seq[Attribute],
+      dataAttributes: Seq[Attribute],
+      statefulProcessor: StatefulProcessor[Any, Any, Any],
+      timeoutMode: TimeoutMode,
+      outputMode: OutputMode,
+      outputObjAttr: Attribute,
+      stateInfo: Option[StatefulOperatorStateInfo],
+      child: SparkPlan): SparkPlan = {
+
+    new TransformWithStateExec(
+      keyDeserializer,
+      valueDeserializer,
+      groupingAttributes,
+      dataAttributes,
+      statefulProcessor,
+      timeoutMode,
+      outputMode,
+      outputObjAttr,
+      stateInfo,
+      Some(System.currentTimeMillis),
+      None,
+      None,
+      child)
+  }
+
 }
