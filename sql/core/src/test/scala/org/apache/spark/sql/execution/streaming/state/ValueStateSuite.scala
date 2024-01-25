@@ -86,7 +86,7 @@ class ValueStateSuite extends SharedSparkSession
   test("Implicit key operations") {
     tryWithProviderResource(newStoreProviderWithValueState(true)) { provider =>
       val store = provider.getStore(0)
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(), true)
+      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID())
       assert(handle.getQueryInfo().getPartitionId === 0)
 
       val testState: ValueState[Long] = handle.getValueState[Long]("testState")
@@ -117,7 +117,7 @@ class ValueStateSuite extends SharedSparkSession
   test("Value state operations for single instance") {
     tryWithProviderResource(newStoreProviderWithValueState(true)) { provider =>
       val store = provider.getStore(0)
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(), true)
+      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID())
       assert(handle.getQueryInfo().getPartitionId === 0)
 
       val testState: ValueState[Long] = handle.getValueState[Long]("testState")
@@ -143,7 +143,7 @@ class ValueStateSuite extends SharedSparkSession
   test("Value state operations for multiple instances") {
     tryWithProviderResource(newStoreProviderWithValueState(true)) { provider =>
       val store = provider.getStore(0)
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(), true)
+      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID())
       assert(handle.getQueryInfo().getPartitionId === 0)
 
       val testState1: ValueState[Long] = handle.getValueState[Long]("testState1")

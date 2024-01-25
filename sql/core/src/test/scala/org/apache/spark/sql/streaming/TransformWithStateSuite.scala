@@ -19,7 +19,6 @@ package org.apache.spark.sql.streaming
 
 import org.apache.spark.SparkException
 import org.apache.spark.internal.Logging
-import org.apache.spark.sql.SaveMode
 import org.apache.spark.sql.execution.streaming._
 import org.apache.spark.sql.execution.streaming.state.{AlsoTestWithChangelogCheckpointingEnabled, RocksDBStateStoreProvider}
 import org.apache.spark.sql.internal.SQLConf
@@ -133,7 +132,6 @@ class TransformWithStateSuite extends StateStoreMetricsTest
     }
   }
 
-
   test("transformWithState - batch should succeed") {
     val inputData = Seq("a", "a", "b")
     val result = inputData.toDS()
@@ -149,18 +147,6 @@ class TransformWithStateSuite extends StateStoreMetricsTest
 
 class TransformWithStateValidationSuite extends StateStoreMetricsTest {
   import testImplicits._
-
-  test("transformWithState - batch should not fail") {
-    val _ = Seq("a", "a", "b").toDS()
-      .groupByKey(x => x)
-      .transformWithState(new RunningCountStatefulProcessor,
-        TimeoutMode.NoTimeouts(),
-        OutputMode.Append())
-      .write
-      .format("noop")
-      .mode(SaveMode.Append)
-      .save()
-  }
 
   test("transformWithState - streaming with hdfsStateStoreProvider should fail") {
     val inputData = MemoryStream[String]

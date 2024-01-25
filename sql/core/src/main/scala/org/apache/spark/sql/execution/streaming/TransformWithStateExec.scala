@@ -58,7 +58,7 @@ case class TransformWithStateExec(
     batchTimestampMs: Option[Long],
     eventTimeWatermarkForLateEvents: Option[Long],
     eventTimeWatermarkForEviction: Option[Long],
-    isStreaming: Boolean,
+    isStreaming: Boolean = true,
     child: SparkPlan)
   extends UnaryExecNode with StateStoreWriter with WatermarkSupport with ObjectProducerExec {
 
@@ -155,7 +155,6 @@ case class TransformWithStateExec(
     metrics // force lazy init at driver
 
     // populate stateInfo if this is a streaming query
-    val stateInfo = getStateInfo
     child.execute().mapPartitionsWithStateStore[InternalRow](
       getStateInfo,
       schemaForKeyRow,
@@ -199,7 +198,6 @@ object TransformWithStateExec {
       numPartitions = shufflePartitions
     )
 
-    // Rewrite physical operator to TransformWithStateForBatchExec
     new TransformWithStateExec(
       keyDeserializer,
       valueDeserializer,
