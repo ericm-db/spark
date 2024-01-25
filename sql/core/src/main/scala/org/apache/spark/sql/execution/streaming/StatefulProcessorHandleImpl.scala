@@ -83,7 +83,7 @@ class StatefulProcessorHandleImpl(store: StateStore, runId: UUID, isStreaming: B
     // Task context is not available in tests, so we generate a random query id and batch id here
     // For batch queries, we populate the queryId manually
     val queryId = if (!isStreaming) {
-      UUID.fromString("00000000-0000-0000-0000-000000000000")
+      "00000000-0000-0000-0000-000000000000"
     } else if (taskCtxOpt.isDefined) {
       taskCtxOpt.get.getLocalProperty(StreamExecution.QUERY_ID_KEY)
     } else {
