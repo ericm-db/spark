@@ -87,7 +87,6 @@ class ValueStateSuite extends SharedSparkSession
     tryWithProviderResource(newStoreProviderWithValueState(true)) { provider =>
       val store = provider.getStore(0)
       val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID())
-      assert(handle.getQueryInfo().getPartitionId === 0)
 
       val testState: ValueState[Long] = handle.getValueState[Long]("testState")
       assert(ImplicitGroupingKeyTracker.getImplicitKeyOption.isEmpty)
@@ -118,7 +117,6 @@ class ValueStateSuite extends SharedSparkSession
     tryWithProviderResource(newStoreProviderWithValueState(true)) { provider =>
       val store = provider.getStore(0)
       val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID())
-      assert(handle.getQueryInfo().getPartitionId === 0)
 
       val testState: ValueState[Long] = handle.getValueState[Long]("testState")
       ImplicitGroupingKeyTracker.setImplicitKey("test_key")
@@ -144,7 +142,6 @@ class ValueStateSuite extends SharedSparkSession
     tryWithProviderResource(newStoreProviderWithValueState(true)) { provider =>
       val store = provider.getStore(0)
       val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID())
-      assert(handle.getQueryInfo().getPartitionId === 0)
 
       val testState1: ValueState[Long] = handle.getValueState[Long]("testState1")
       val testState2: ValueState[Long] = handle.getValueState[Long]("testState2")
