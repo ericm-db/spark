@@ -476,7 +476,7 @@ object QueryExecution {
         Nil
       } else {
         Seq(ReuseExchangeAndSubquery)
-      }) ++ Seq(StateOpIdBatchRule)
+      })
   }
 
   /**
