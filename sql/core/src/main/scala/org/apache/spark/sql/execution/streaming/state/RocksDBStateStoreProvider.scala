@@ -122,9 +122,38 @@ private[sql] class RocksDBStateStoreProvider
       }
     }
 
+    def ttlFunc(rocksDB: RocksDB): Unit = {
+      val kvEncoder = keyValueEncoderMap.get("ttl")
+      val expiredKeyStateNames =
+        rocksDB.iterator("ttl").flatMap { kv =>
+          val key = kvEncoder._1.decodeKey(kv.key)
+          val ttl = key.getLong(0)
+          if (ttl <= System.currentTimeMillis()) {
+            Some(key)
+          } else {
+            None
+          }
+        }
+      expiredKeyStateNames.foreach { keyStateName =>
+        val stateName = SerializationUtils.deserialize(
+          keyStateName.getBinary(1)).asInstanceOf[String]
+        val kvEncoder = keyValueEncoderMap.get(stateName)
+        val row = rocksDB.get(keyStateName.getBinary(2), stateName)
+        val value = kvEncoder._2.decodeValue(row)
+        if (value != null) {
+          val ttl = value.getLong(1)
+          if (ttl <= System.currentTimeMillis()) {
+            logError(s"Value is expired for state $stateName")
+            rocksDB.remove(keyStateName.getBinary(2), stateName)
+          }
+        }
+      }
+    }
+
     override def commit(): Long = synchronized {
       try {
         verify(state == UPDATING, "Cannot commit after already committed or aborted")
+        ttlFunc(rocksDB)
         val newVersion = rocksDB.commit()
         state = COMMITTED
         logInfo(s"Committed $newVersion for $id")
@@ -320,39 +349,6 @@ private[sql] class RocksDBStateStoreProvider
 
   private def verify(condition: => Boolean, msg: String): Unit = {
     if (!condition) { throw new IllegalStateException(msg) }
-  }
-
-  def findExpiredKeys(dbInstance: RocksDB): Iterator[UnsafeRow] = {
-    val kvEncoder = keyValueEncoderMap.get("ttl")
-    dbInstance.iterator("ttl").flatMap { kv =>
-      val key = kvEncoder._1.decodeKey(kv.key)
-      val ttl = key.getLong(0)
-      if (ttl <= System.currentTimeMillis()) {
-        Some(key)
-      } else {
-        None
-      }
-    }
-  }
-
-  override def doTTL(store: StateStore): Unit = {
-    val dbInstance = store.asInstanceOf[RocksDBStateStore].dbInstance()
-    val expiredKeyStateNames = findExpiredKeys(dbInstance)
-    expiredKeyStateNames.foreach { keyStateName =>
-      val stateName = SerializationUtils.deserialize(
-        keyStateName.getBinary(1)).asInstanceOf[String]
-      val kvEncoder = keyValueEncoderMap.get(stateName)
-      val row = dbInstance.get(keyStateName.getBinary(2), stateName)
-      val value = kvEncoder._2.decodeValue(row)
-      if (value != null) {
-        val ttl = value.getLong(1)
-        if (ttl <= System.currentTimeMillis()) {
-          logError(s"Value is expired for state $stateName")
-          dbInstance.remove(keyStateName.getBinary(2), stateName)
-        }
-      }
-    }
-    dbInstance.close()
   }
 
   def loadedVersion(): Long = rocksDB.loadedVersion

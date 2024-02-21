@@ -704,9 +704,22 @@ class RocksDB(
     }
   }
 
-  private def release(): Unit = acquireLock.synchronized {
+  def release(): Unit = acquireLock.synchronized {
     acquiredThreadInfo = null
     acquireLock.notifyAll()
+  }
+
+  // function doTTL that takes a function as a parameter (which takes this as a param),
+  // acquires a lock, executes the function, and releases the lock.
+  def doTTL(f: RocksDB => Unit): Unit = {
+    try {
+      acquire()
+      if (db != null) {
+        f(this)
+      }
+    } finally {
+      release()
+    }
   }
 
   private def getDBProperty(property: String): Long = {
