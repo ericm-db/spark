@@ -123,22 +123,27 @@ private[sql] class RocksDBStateStoreProvider
     }
 
     def ttlFunc(rocksDB: RocksDB): Unit = {
-      val kvEncoder = keyValueEncoderMap.get("ttl")
+      val ttlEncoder = keyValueEncoderMap.get("ttl")
       val expiredKeyStateNames =
         rocksDB.iterator("ttl").flatMap { kv =>
-          val key = kvEncoder._1.decodeKey(kv.key)
+          val key = ttlEncoder._1.decodeKey(kv.key)
           val ttl = key.getLong(0)
           if (ttl <= System.currentTimeMillis()) {
+            logError("value is potentially expired")
             Some(key)
           } else {
             None
           }
         }
+      // expiredKeyStateName = UnsafeRow(ttl, stateName, groupingKey, userKey)
       expiredKeyStateNames.foreach { keyStateName =>
         val stateName = SerializationUtils.deserialize(
           keyStateName.getBinary(1)).asInstanceOf[String]
+        val groupingKey = SerializationUtils.deserialize(
+          keyStateName.getBinary(2)
+        ).asInstanceOf[Array[Byte]]
         val kvEncoder = keyValueEncoderMap.get(stateName)
-        val row = rocksDB.get(keyStateName.getBinary(2), stateName)
+        val row = rocksDB.get(groupingKey, stateName)
         val value = kvEncoder._2.decodeValue(row)
         if (value != null) {
           val ttl = value.getLong(1)
@@ -146,14 +151,16 @@ private[sql] class RocksDBStateStoreProvider
             logError(s"Value is expired for state $stateName")
             rocksDB.remove(keyStateName.getBinary(2), stateName)
           }
+        } else {
+          logError("Value is null")
         }
       }
     }
 
     override def commit(): Long = synchronized {
       try {
+        rocksDB.doTTL(ttlFunc)
         verify(state == UPDATING, "Cannot commit after already committed or aborted")
-        ttlFunc(rocksDB)
         val newVersion = rocksDB.commit()
         state = COMMITTED
         logInfo(s"Committed $newVersion for $id")

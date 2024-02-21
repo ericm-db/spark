@@ -45,9 +45,9 @@ class RunningCountStatefulProcessorZeroTTL
   }
 
   override def handleInputRows(
-                                key: String,
-                                inputRows: Iterator[String],
-                                timerValues: TimerValues): Iterator[(String, String)] = {
+      key: String,
+      inputRows: Iterator[String],
+      timerValues: TimerValues): Iterator[(String, String)] = {
     val count = _countState.getOption().getOrElse(0L) + 1
     if (count == 3) {
       _countState.remove()
