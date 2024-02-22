@@ -26,9 +26,10 @@ import org.apache.hadoop.conf.Configuration
 
 import org.apache.spark.{SparkConf, SparkEnv}
 import org.apache.spark.internal.Logging
-import org.apache.spark.sql.catalyst.expressions.UnsafeRow
+import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.catalyst.expressions.{UnsafeProjection, UnsafeRow}
 import org.apache.spark.sql.errors.QueryExecutionErrors
-import org.apache.spark.sql.types.StructType
+import org.apache.spark.sql.types.{BinaryType, StructType}
 import org.apache.spark.util.Utils
 
 private[sql] class RocksDBStateStoreProvider
@@ -129,38 +130,32 @@ private[sql] class RocksDBStateStoreProvider
           val key = ttlEncoder._1.decodeKey(kv.key)
           val ttl = key.getLong(0)
           if (ttl <= System.currentTimeMillis()) {
-            logError("value is potentially expired")
             Some(key)
           } else {
             None
           }
         }
-      // expiredKeyStateName = UnsafeRow(ttl, stateName, groupingKey, userKey)
+      val schemaForKeyRow: StructType = new StructType().add("key", BinaryType)
+      val keyEncoder = UnsafeProjection.create(schemaForKeyRow)
       expiredKeyStateNames.foreach { keyStateName =>
         val stateName = SerializationUtils.deserialize(
           keyStateName.getBinary(1)).asInstanceOf[String]
-        val groupingKey = SerializationUtils.deserialize(
-          keyStateName.getBinary(2)
-        ).asInstanceOf[Array[Byte]]
-        val kvEncoder = keyValueEncoderMap.get(stateName)
-        val row = rocksDB.get(groupingKey, stateName)
-        val value = kvEncoder._2.decodeValue(row)
-        if (value != null) {
-          val ttl = value.getLong(1)
+        val groupingKey = keyStateName.getBinary(2)
+        val keyRow = keyEncoder(InternalRow(groupingKey))
+        val row = get(keyRow, stateName)
+        if (row != null) {
+          val ttl = row.getLong(1)
           if (ttl <= System.currentTimeMillis()) {
-            logError(s"Value is expired for state $stateName")
-            rocksDB.remove(keyStateName.getBinary(2), stateName)
+            remove(keyRow, stateName)
           }
-        } else {
-          logError("Value is null")
         }
       }
     }
 
     override def commit(): Long = synchronized {
       try {
-        rocksDB.doTTL(ttlFunc)
         verify(state == UPDATING, "Cannot commit after already committed or aborted")
+        rocksDB.doTTL(ttlFunc)
         val newVersion = rocksDB.commit()
         state = COMMITTED
         logInfo(s"Committed $newVersion for $id")

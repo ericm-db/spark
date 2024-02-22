@@ -261,8 +261,6 @@ class RocksDB(
 
     if (!checkColFamilyExists(colFamilyName)) {
       assert(db != null)
-      logError(s"Creating column family $colFamilyName" +
-        s" for partition ${TaskContext.getPartitionId()} and version $loadedVersion")
       val descriptor = new ColumnFamilyDescriptor(colFamilyName.getBytes, columnFamilyOptions)
       val handle = db.createColumnFamily(descriptor)
       colFamilyNameToHandleMap(handle.getName.map(_.toChar).mkString) = handle
