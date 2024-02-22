@@ -174,8 +174,8 @@ private[sql] class RocksDBStateStoreProvider
             None
           }
         }
-
       expiredKeyStateNames.foreach { keyStateName =>
+        remove(keyStateName, "ttl")
         val stateName = SerializationUtils.deserialize(
           keyStateName.getBinary(1)).asInstanceOf[String]
         val groupingKey = keyStateName.getBinary(2)
