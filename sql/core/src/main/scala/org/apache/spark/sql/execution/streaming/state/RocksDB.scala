@@ -329,7 +329,6 @@ class RocksDB(
     if (conf.trackTotalNumberOfRows) {
       val value = db.get(colFamilyNameToHandleMap(colFamilyName), readOptions, key)
       if (value != null) {
-        logError(s"Removing key $key from partition ${TaskContext.getPartitionId()}")
         numKeysOnWritingVersion -= 1
       }
     }

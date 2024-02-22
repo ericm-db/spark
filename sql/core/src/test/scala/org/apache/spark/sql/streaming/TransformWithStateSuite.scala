@@ -304,12 +304,11 @@ class TransformWithStateSuite extends StateStoreMetricsTest
     }
   }
 
-  test("transformWithState - maintenance task should clean up expired state") {
+  test("transformWithState - ttl should clean up expired state") {
     withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
       classOf[RocksDBStateStoreProvider].getName,
       SQLConf.SHUFFLE_PARTITIONS.key ->
-        TransformWithStateSuiteUtils.NUM_SHUFFLE_PARTITIONS.toString,
-      SQLConf.STREAMING_MAINTENANCE_INTERVAL.key -> "100") {
+        TransformWithStateSuiteUtils.NUM_SHUFFLE_PARTITIONS.toString) {
       val inputData = MemoryStream[String]
 
       val result = inputData.toDS()
