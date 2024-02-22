@@ -18,12 +18,15 @@ package org.apache.spark.sql.execution.streaming
 
 import java.util.UUID
 
+import scala.concurrent.duration.Duration
+
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.execution.streaming.state._
-import org.apache.spark.sql.streaming.{ListState, QueryInfo, StatefulProcessorHandle, TimeoutMode, ValueState}
+import org.apache.spark.sql.execution.streaming.state.StateStore
+import org.apache.spark.sql.streaming.{ListState, QueryInfo, StatefulProcessorHandle, TimeoutMode, TTLMode, ValueState}
 import org.apache.spark.util.Utils
 
 /**
@@ -203,6 +206,14 @@ class StatefulProcessorHandleImpl(
     verify(currState == CREATED, s"Cannot create state variable with name=$stateName after " +
       "initialization is complete")
     val resultState = new ListStateImpl[T](store, stateName, keyEncoder)
+    resultState
+  }
+
+  override def getValueState[T](stateName: String, ttlMode: TTLMode,
+      ttl: Duration): ValueState[T] = {
+    verify(currState == CREATED, s"Cannot create state variable with name=$stateName after " +
+      "initialization is complete")
+    val resultState = new ValueStateImpl[T](store, stateName, keyEncoder, ttlMode, ttl)
     resultState
   }
 }
