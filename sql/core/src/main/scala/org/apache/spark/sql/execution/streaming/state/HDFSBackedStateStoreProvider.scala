@@ -125,11 +125,7 @@ private[sql] class HDFSBackedStateStoreProvider extends StateStoreProvider with 
         valueSchema: StructType,
         useMultipleValuesPerKey: Boolean = false,
         isInternal: Boolean = false): Unit = {
-      if (colFamilyName == "ttl") {
-        throw StateStoreErrors.ttlNotSupportedWithProvider("HDFSStateStoreProvider")
-      } else {
-        throw StateStoreErrors.multipleColumnFamiliesNotSupported("HDFSStateStoreProvider")
-      }
+      throw StateStoreErrors.multipleColumnFamiliesNotSupported("HDFSStateStoreProvider")
     }
 
     override def get(key: UnsafeRow, colFamilyName: String): UnsafeRow = {
