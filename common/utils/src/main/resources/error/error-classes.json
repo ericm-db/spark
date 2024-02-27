@@ -5734,11 +5734,6 @@
       "Couldn't find a valid constructor on <cls>."
     ]
   },
-  "_LEGACY_ERROR_TEMP_2021" : {
-    "message" : [
-      "Couldn't find a primary constructor on <cls>."
-    ]
-  },
   "_LEGACY_ERROR_TEMP_2023" : {
     "message" : [
       "Unresolved encoder expected, but <attr> was found."
