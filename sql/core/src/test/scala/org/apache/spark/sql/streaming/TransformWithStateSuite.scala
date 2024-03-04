@@ -17,7 +17,7 @@
 
 package org.apache.spark.sql.streaming
 
-import org.apache.spark.SparkException
+import org.apache.spark.{SparkException, SparkRuntimeException}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.execution.streaming._
 import org.apache.spark.sql.execution.streaming.state.{AlsoTestWithChangelogCheckpointingEnabled, RocksDBStateStoreProvider, StateStoreMultipleColumnFamiliesNotSupportedException}
@@ -32,15 +32,12 @@ object TransformWithStateSuiteUtils {
 class RunningCountStatefulProcessor extends StatefulProcessor[String, String, (String, String)]
   with Logging {
   @transient var _countState: ValueState[Long] = _
-  @transient var _processorHandle: StatefulProcessorHandle = _
 
   override def init(
-      handle: StatefulProcessorHandle,
       outputMode: OutputMode,
       timeoutMode: TimeoutMode) : Unit = {
-    _processorHandle = handle
-    assert(handle.getQueryInfo().getBatchId >= 0)
-    _countState = _processorHandle.getValueState[Long]("countState")
+    assert(getHandle.getQueryInfo().getBatchId >= 0)
+    _countState = getHandle.getValueState[Long]("countState")
   }
 
   override def handleInputRows(
@@ -79,7 +76,7 @@ class RunningCountStatefulProcessorWithProcTimeTimer extends RunningCountStatefu
     } else {
       val currCount = _countState.getOption().getOrElse(0L)
       if (currCount == 0 && (key == "a" || key == "c")) {
-        _processorHandle.registerTimer(timerValues.getCurrentProcessingTimeInMs()
+        getHandle.registerTimer(timerValues.getCurrentProcessingTimeInMs()
           + 5000)
       }
 
@@ -101,11 +98,10 @@ class RunningCountStatefulProcessorWithAddRemoveProcTimeTimer
   @transient private var _timerState: ValueState[Long] = _
 
   override def init(
-      handle: StatefulProcessorHandle,
       outputMode: OutputMode,
       timeoutMode: TimeoutMode) : Unit = {
-    super.init(handle, outputMode, timeoutMode)
-    _timerState = _processorHandle.getValueState[Long]("timerState")
+    super.init(outputMode, timeoutMode)
+    _timerState = getHandle.getValueState[Long]("timerState")
   }
 
   private def handleProcessingTimeBasedTimers(
@@ -130,12 +126,12 @@ class RunningCountStatefulProcessorWithAddRemoveProcTimeTimer
         var nextTimerTs: Long = 0L
         if (currCount == 0) {
           nextTimerTs = timerValues.getCurrentProcessingTimeInMs() + 5000
-          _processorHandle.registerTimer(nextTimerTs)
+          getHandle.registerTimer(nextTimerTs)
           _timerState.update(nextTimerTs)
         } else if (currCount == 1) {
-          _processorHandle.deleteTimer(_timerState.get())
+          getHandle.deleteTimer(_timerState.get())
           nextTimerTs = timerValues.getCurrentProcessingTimeInMs() + 7500
-          _processorHandle.registerTimer(nextTimerTs)
+          getHandle.registerTimer(nextTimerTs)
           _timerState.update(nextTimerTs)
         }
       }
@@ -148,16 +144,13 @@ class MaxEventTimeStatefulProcessor
   extends StatefulProcessor[String, (String, Long), (String, Int)]
   with Logging {
   @transient var _maxEventTimeState: ValueState[Long] = _
-  @transient var _processorHandle: StatefulProcessorHandle = _
   @transient var _timerState: ValueState[Long] = _
 
   override def init(
-      handle: StatefulProcessorHandle,
       outputMode: OutputMode,
       timeoutMode: TimeoutMode): Unit = {
-    _processorHandle = handle
-    _maxEventTimeState = _processorHandle.getValueState[Long]("maxEventTimeState")
-    _timerState = _processorHandle.getValueState[Long]("timerState")
+    _maxEventTimeState = getHandle.getValueState[Long]("maxEventTimeState")
+    _timerState = getHandle.getValueState[Long]("timerState")
   }
 
   override def handleInputRows(
@@ -178,8 +171,8 @@ class MaxEventTimeStatefulProcessor
 
       val registeredTimerMs: Long = _timerState.getOption().getOrElse(0L)
       if (registeredTimerMs < timeoutTimestampMs) {
-        _processorHandle.deleteTimer(registeredTimerMs)
-        _processorHandle.registerTimer(timeoutTimestampMs)
+        getHandle.deleteTimer(registeredTimerMs)
+        getHandle.registerTimer(timeoutTimestampMs)
         _timerState.update(timeoutTimestampMs)
       }
       Iterator((key, maxEventTimeSec.toInt))
@@ -192,18 +185,14 @@ class RunningCountMostRecentStatefulProcessor
   with Logging {
   @transient private var _countState: ValueState[Long] = _
   @transient private var _mostRecent: ValueState[String] = _
-  @transient var _processorHandle: StatefulProcessorHandle = _
 
   override def init(
-      handle: StatefulProcessorHandle,
       outputMode: OutputMode,
       timeoutMode: TimeoutMode) : Unit = {
-    _processorHandle = handle
-    assert(handle.getQueryInfo().getBatchId >= 0)
-    _countState = _processorHandle.getValueState[Long]("countState")
-    _mostRecent = _processorHandle.getValueState[String]("mostRecent")
+    assert(getHandle.getQueryInfo().getBatchId >= 0)
+    _countState = getHandle.getValueState[Long]("countState")
+    _mostRecent = getHandle.getValueState[String]("mostRecent")
   }
-
   override def handleInputRows(
       key: String,
       inputRows: Iterator[(String, String)],
@@ -226,16 +215,13 @@ class MostRecentStatefulProcessorWithDeletion
   extends StatefulProcessor[String, (String, String), (String, String)]
   with Logging {
   @transient private var _mostRecent: ValueState[String] = _
-  @transient var _processorHandle: StatefulProcessorHandle = _
 
   override def init(
-       handle: StatefulProcessorHandle,
        outputMode: OutputMode,
        timeoutMode: TimeoutMode) : Unit = {
-    _processorHandle = handle
-    assert(handle.getQueryInfo().getBatchId >= 0)
-    _processorHandle.deleteIfExists("countState")
-    _mostRecent = _processorHandle.getValueState[String]("mostRecent")
+    assert(getHandle.getQueryInfo().getBatchId >= 0)
+    getHandle.deleteIfExists("countState")
+    _mostRecent = getHandle.getValueState[String]("mostRecent")
   }
 
   override def handleInputRows(
@@ -264,7 +250,7 @@ class RunningCountStatefulProcessorWithError extends RunningCountStatefulProcess
       timerValues: TimerValues,
       expiredTimerInfo: ExpiredTimerInfo): Iterator[(String, String)] = {
     // Trying to create value state here should fail
-    _tempState = _processorHandle.getValueState[Long]("tempState")
+    _tempState = getHandle.getValueState[Long]("tempState")
     Iterator.empty
   }
 }
@@ -325,6 +311,18 @@ class TransformWithStateSuite extends StateStoreMetricsTest
         CheckNewAnswer(("a", "1"), ("c", "1"))
       )
     }
+  }
+
+  test("Use statefulProcessor without transformWithState - handle should be absent") {
+    val processor = new RunningCountStatefulProcessor()
+    val ex = intercept[Exception] {
+      processor.getHandle
+    }
+    checkError(
+      ex.asInstanceOf[SparkRuntimeException],
+      errorClass = "STATE_STORE_HANDLE_NOT_INITIALIZED",
+      parameters = Map.empty
+    )
   }
 
   test("transformWithState - streaming with rocksdb and processing time timer " +

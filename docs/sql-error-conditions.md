@@ -2115,6 +2115,13 @@ Failed to create column family with unsupported starting character and name=`<co
 
 Failed to remove default column family with reserved name=`<colFamilyName>`.
 
+### STATE_STORE_HANDLE_NOT_INITIALIZED
+
+[SQLSTATE: 42802](sql-error-conditions-sqlstates.html#class-42-syntax-error-or-access-rule-violation)
+
+The handle has not been initialized for this StatefulProcessor.
+Please only use the StatefulProcessor within the transformWithState operator.
+
 ### STATE_STORE_MULTIPLE_VALUES_PER_KEY
 
 [SQLSTATE: 42802](sql-error-conditions-sqlstates.html#class-42-syntax-error-or-access-rule-violation)
