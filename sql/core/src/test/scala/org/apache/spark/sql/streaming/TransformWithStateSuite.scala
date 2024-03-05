@@ -88,10 +88,17 @@ class RunningCountMostRecentStatefulProcessor
   @transient private var _countState: ValueState[Long] = _
   @transient private var _mostRecent: ValueState[String] = _
 
-  override def init(outputMode: OutputMode): Unit = {
-    _countState = getHandle.getValueState[Long]("countState")
+  override def init(
+      outputMode: OutputMode) : Unit = {
+    assert(getHandle.getQueryInfo().getBatchId >= 0)
+    _countState = getHandle.getValueState[Long](
+      "countState",
+      TTLMode.ProcessingTimeTTL(),
+      Duration.Zero
+    )
     _mostRecent = getHandle.getValueState[String]("mostRecent")
   }
+
   override def handleInputRows(
       key: String,
       inputRows: Iterator[(String, String)],
@@ -292,6 +299,32 @@ class TransformWithStateSuite extends StateStoreMetricsTest
         CheckNewAnswer(("a", "1"), ("b", "1")),
         AddData(inputData, "a", "b"),
         CheckNewAnswer(("a", "1"), ("b", "1")),
+        StopStream
+      )
+    }
+  }
+
+  test("transformWithState - one ttl") {
+    withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
+      classOf[RocksDBStateStoreProvider].getName,
+      SQLConf.SHUFFLE_PARTITIONS.key ->
+      TransformWithStateSuiteUtils.NUM_SHUFFLE_PARTITIONS.toString) {
+      val inputData = MemoryStream[(String, String)]
+      val stream1 = inputData.toDS()
+        .groupByKey(x => x._1)
+        .transformWithState(new RunningCountMostRecentStatefulProcessor(),
+          TimeoutMode.NoTimeouts(),
+          OutputMode.Update())
+
+      // State should expire immediately, meaning each answer is independent
+      // of previous counts
+      testStream(stream1, OutputMode.Update())(
+        AddData(inputData, ("a", "str1")),
+        CheckNewAnswer(("a", "1", "")),
+        AddData(inputData, ("a", "str2"), ("b", "str3")),
+        CheckNewAnswer(("a", "1", "str1"), ("b", "1", "")),
+        AddData(inputData, ("a", "str4"), ("b", "str5")),
+        CheckNewAnswer(("a", "1", "str2"), ("b", "1", "str3")),
         StopStream
       )
     }
