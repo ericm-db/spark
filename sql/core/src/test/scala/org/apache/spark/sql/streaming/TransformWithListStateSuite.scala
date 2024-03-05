@@ -31,8 +31,7 @@ class TestListStateProcessor
 
   override def init(outputMode: OutputMode,
                     timeoutMode: TimeoutMode): Unit = {
-    _processorHandle = handle
-    _listState = handle.getListState("testListState")
+    _listState = getHandle.getListState("testListState")
   }
 
   override def handleInputRows(

@@ -37,7 +37,8 @@ class RunningCountStatefulProcessorZeroTTL
   @transient private var _countState: ValueState[Long] = _
 
   override def init(
-   outputMode: OutputMode) : Unit = {
+   outputMode: OutputMode,
+   timeoutMode: TimeoutMode) : Unit = {
     assert(getHandle.getQueryInfo().getBatchId >= 0)
     _countState = getHandle.getValueState[Long]("countState",
       TTLMode.ProcessingTimeTTL(), Duration.Zero)
