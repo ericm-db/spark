@@ -91,6 +91,38 @@ class RunningCountMostRecentStatefulProcessor
   override def init(
       outputMode: OutputMode) : Unit = {
     assert(getHandle.getQueryInfo().getBatchId >= 0)
+    _countState = getHandle.getValueState[Long]("countState")
+    _mostRecent = getHandle.getValueState[String]("mostRecent")
+  }
+
+  override def handleInputRows(
+      key: String,
+      inputRows: Iterator[(String, String)],
+      timerValues: TimerValues): Iterator[(String, String, String)] = {
+    val count = _countState.getOption().getOrElse(0L) + 1
+    val mostRecent = _mostRecent.getOption().getOrElse("")
+
+    var output = List[(String, String, String)]()
+    inputRows.foreach { row =>
+      _mostRecent.update(row._2)
+      _countState.update(count)
+      output = (key, count.toString, mostRecent) :: output
+    }
+    output.iterator
+  }
+
+  override def close(): Unit = {}
+}
+
+class RunningCountMostRecentStatefulProcessorWithTTL
+  extends StatefulProcessor[String, (String, String), (String, String, String)]
+    with Logging {
+  @transient private var _countState: ValueState[Long] = _
+  @transient private var _mostRecent: ValueState[String] = _
+
+  override def init(
+                     outputMode: OutputMode) : Unit = {
+    assert(getHandle.getQueryInfo().getBatchId >= 0)
     _countState = getHandle.getValueState[Long](
       "countState",
       TTLMode.ProcessingTimeTTL(),
@@ -100,9 +132,9 @@ class RunningCountMostRecentStatefulProcessor
   }
 
   override def handleInputRows(
-      key: String,
-      inputRows: Iterator[(String, String)],
-      timerValues: TimerValues): Iterator[(String, String, String)] = {
+                                key: String,
+                                inputRows: Iterator[(String, String)],
+                                timerValues: TimerValues): Iterator[(String, String, String)] = {
     val count = _countState.getOption().getOrElse(0L) + 1
     val mostRecent = _mostRecent.getOption().getOrElse("")
 
@@ -277,7 +309,7 @@ class TransformWithStateSuite extends StateStoreMetricsTest
     }
   }
 
-  test("transformWithState - zero ttl") {
+  test("transformWithState - Zero duration TTL, should expire immediately") {
     withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
       classOf[RocksDBStateStoreProvider].getName,
       SQLConf.SHUFFLE_PARTITIONS.key ->
@@ -304,7 +336,7 @@ class TransformWithStateSuite extends StateStoreMetricsTest
     }
   }
 
-  test("transformWithState - one ttl") {
+  test("transformWithState - multiple state variables with one TTL") {
     withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
       classOf[RocksDBStateStoreProvider].getName,
       SQLConf.SHUFFLE_PARTITIONS.key ->
@@ -312,7 +344,7 @@ class TransformWithStateSuite extends StateStoreMetricsTest
       val inputData = MemoryStream[(String, String)]
       val stream1 = inputData.toDS()
         .groupByKey(x => x._1)
-        .transformWithState(new RunningCountMostRecentStatefulProcessor(),
+        .transformWithState(new RunningCountMostRecentStatefulProcessorWithTTL(),
           TimeoutMode.NoTimeouts(),
           OutputMode.Update())
 

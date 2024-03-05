@@ -135,7 +135,6 @@ case class TransformWithStateExec(
       if (row != null) {
         val ttl = row.getLong(1)
         if (ttl != -1 && ttl <= System.currentTimeMillis()) {
-          logError(s"Removing key from stateName=$stateName as it has expired")
           store.remove(keyRow, stateName)
         }
       }
