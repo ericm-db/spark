@@ -110,8 +110,8 @@ case class TransformWithStateExec(
 
   def startTTLThread(store: StateStore): ForkJoinPool = {
     // get state name from the statefulProcessor
-    val ttlColFamilies = store.listColumnFamilies()
-    val threadPool = new ForkJoinPool(1)
+    val ttlColFamilies = store.listColumnFamilies().filter(_.startsWith("ttl_"))
+    val threadPool = new ForkJoinPool(ttlColFamilies.size)
     @volatile var exception: Option[Throwable] = None
     // start thread in fork join pool for each ttl column family
     ttlColFamilies.foreach { ttlColFamily =>
