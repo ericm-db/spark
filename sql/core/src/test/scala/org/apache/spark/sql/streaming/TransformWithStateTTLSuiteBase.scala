@@ -99,6 +99,7 @@ object TTLInputProcessFunction {
       }
     } else if (row.action == "get_ttl_value_from_state") {
       val ttlExpirations = listState.getTTLValues()
+      // get the ttlExpirations that are defined and not equal to -1
       ttlExpirations.filter(_.isDefined).foreach { ttlExpiration =>
         results = OutputEvent(key, -1, isTTLValue = true, ttlExpiration.get) :: results
       }
@@ -191,7 +192,6 @@ class ListStateTTLProcessor
 
     for (row <- inputRows) {
       val resultIter = TTLInputProcessFunction.processRow(_ttlMode, row, _listState)
-      logError(s"### resultIter.hasNext = ${resultIter.hasNext}")
       resultIter.foreach { r =>
         results = r :: results
       }
@@ -770,6 +770,72 @@ class ListStateTTLSuite extends TransformWithStateTTLSuiteBase {
         AddData(inputStream, InputEvent("k1", "append", 7, Duration.ofMinutes(1))),
         AddData(inputStream, InputEvent("k1", "append", 8, Duration.ofMinutes(1))),
         AddData(inputStream, InputEvent("k1", "append", 9, Duration.ofMinutes(1))),
+        // advance clock to trigger processing
+        AdvanceManualClock(1 * 1000),
+        CheckNewAnswer(),
+        // Advance clock to expire the middle three elements
+        AdvanceManualClock(30 * 1000),
+        // Get all elements in the list
+        AddData(inputStream, InputEvent("k1", "get", -1, null)),
+        AdvanceManualClock(1 * 1000),
+        // Validate that the expired elements are not returned
+        CheckNewAnswer(
+          OutputEvent("k1", 1, isTTLValue = false, -1),
+          OutputEvent("k1", 2, isTTLValue = false, -1),
+          OutputEvent("k1", 3, isTTLValue = false, -1),
+          OutputEvent("k1", 7, isTTLValue = false, -1),
+          OutputEvent("k1", 8, isTTLValue = false, -1),
+          OutputEvent("k1", 9, isTTLValue = false, -1)
+        )
+      )
+    }
+  }
+
+  test("verify iterator works with expired values in middle of list - event time ttl") {
+    withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
+      classOf[RocksDBStateStoreProvider].getName,
+      SQLConf.SHUFFLE_PARTITIONS.key -> "1") {
+      val inputStream = MemoryStream[InputEvent]
+      val result = inputStream.toDS()
+        .withWatermark("eventTime", "1 second")
+        .groupByKey(x => x.key)
+        .transformWithState(
+          getProcessor(),
+          TimeoutMode.NoTimeouts(),
+          TTLMode.EventTimeTTL())
+
+      val eventTime1 = Timestamp.valueOf("2024-01-01 00:00:00")
+      val eventTime2 = Timestamp.valueOf("2024-01-01 00:01:00")
+      val eventTime3 = Timestamp.valueOf("2024-01-01 00:03:00")
+
+      val ttlExpirationEarly = Timestamp.valueOf("2024-01-01 00:02:00")
+      val ttlExpirationEarlyMs = ttlExpirationEarly.getTime
+
+      val ttlExpirationLate = Timestamp.valueOf("2024-01-01 00:05:00")
+      val ttlExpirationLateMs = ttlExpirationLate.getTime
+
+      val clock = new StreamManualClock
+      testStream(result)(
+        StartStream(Trigger.ProcessingTime("1 second"), triggerClock = clock),
+        // Add three elements with duration of a minute
+        AddData(inputStream, InputEvent("k1", "put", 1, null, eventTime1, ttlExpirationLate)),
+        AdvanceManualClock(1 * 1000),
+        AddData(inputStream, InputEvent("k1", "append", 2, null, eventTime1, ttlExpirationLate)),
+        AddData(inputStream, InputEvent("k1", "append", 3, null, eventTime1, ttlExpirationLate)),
+        // advance clock to trigger processing
+        AdvanceManualClock(1 * 1000),
+        CheckNewAnswer(),
+        // Add three elements with a duration of 15 seconds
+        AddData(inputStream, InputEvent("k1", "append", 4, null, eventTime2, ttlExpirationEarly)),
+        AddData(inputStream, InputEvent("k1", "append", 5, null, eventTime2, ttlExpirationEarly)),
+        AddData(inputStream, InputEvent("k1", "append", 6, null, eventTime2, ttlExpirationEarly)),
+        // advance clock to trigger processing
+        AdvanceManualClock(1 * 1000),
+        CheckNewAnswer(),
+        // Add three elements with a duration of a minute
+        AddData(inputStream, InputEvent("k1", "append", 7, null, eventTime3, ttlExpirationLate)),
+        AddData(inputStream, InputEvent("k1", "append", 8, null, eventTime3, ttlExpirationLate)),
+        AddData(inputStream, InputEvent("k1", "append", 9, null, eventTime3, ttlExpirationLate)),
         // advance clock to trigger processing
         AdvanceManualClock(1 * 1000),
         CheckNewAnswer(),
