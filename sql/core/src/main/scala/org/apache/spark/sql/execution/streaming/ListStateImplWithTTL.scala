@@ -154,16 +154,9 @@ class ListStateImplWithTTL[S](
   }
 
   /**
-   * Clears the user state associated with this grouping key
-   * if it has expired. This function is called by Spark to perform
-   * cleanup at the end of transformWithState processing.
    *
-   * Spark uses a secondary index to determine if the user state for
-   * this grouping key has expired. However, its possible that the user
-   * has updated the TTL and secondary index is out of date. Implementations
-   * must validate that the user State has actually expired before cleanup based
-   * on their own State data.
-   *
+   * Loops through all the values associated with the grouping key, and removes
+   * the expired elements from the list.
    * @param groupingKey grouping key for which cleanup should be performed.
    */
   override def clearIfExpired(groupingKey: Array[Byte]): Unit = {
