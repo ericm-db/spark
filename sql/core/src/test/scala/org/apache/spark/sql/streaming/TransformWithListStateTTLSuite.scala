@@ -76,8 +76,8 @@ class ListStateTTLProcessor(ttlConfig: TTLConfig)
       }
     } else if (row.action == "get_ttl_value_from_state") {
       val ttlExpiration = listState.getTTLValues()
-      ttlExpiration.filter(_.isDefined).foreach { ttlExpiration =>
-        results = OutputEvent(key, -1, isTTLValue = true, ttlExpiration.get) :: results
+      ttlExpiration.foreach { ttlExpiration =>
+        results = OutputEvent(key, -1, isTTLValue = true, ttlExpiration) :: results
       }
     } else if (row.action == "put") {
       listState.put(Array(row.value))
