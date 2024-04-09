@@ -101,7 +101,7 @@ class TransformWithListStateTTLSuite extends TransformWithStateTTLTest {
     new ListStateTTLProcessor(ttlConfig)
   }
 
-  test("verify iterator works with expired values in middle of list") {
+  test("verify iterator works with expired values in middle of list after restarting stream") {
     withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
       classOf[RocksDBStateStoreProvider].getName,
       SQLConf.SHUFFLE_PARTITIONS.key -> "1") {
@@ -208,7 +208,7 @@ class TransformWithListStateTTLSuite extends TransformWithStateTTLTest {
   }
 
 
-  test("verify iterator works with expired values in beginning of list") {
+  test("verify iterator works with expired values in beginning of list after restarting stream") {
     withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
       classOf[RocksDBStateStoreProvider].getName,
       SQLConf.SHUFFLE_PARTITIONS.key -> "1") {
@@ -295,6 +295,71 @@ class TransformWithListStateTTLSuite extends TransformWithStateTTLTest {
           StopStream
         )
       }
+    }
+  }
+
+  test("verify expired values are evicted from list state") {
+    withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
+      classOf[RocksDBStateStoreProvider].getName,
+      SQLConf.SHUFFLE_PARTITIONS.key -> "1") {
+
+      val inputStream = MemoryStream[InputEvent]
+      val ttlConfig = TTLConfig(ttlDuration = Duration.ofMinutes(1))
+      val result = inputStream.toDS()
+        .groupByKey(x => x.key)
+        .transformWithState(
+          getProcessor(ttlConfig),
+          TimeoutMode.NoTimeouts(),
+          TTLMode.ProcessingTimeTTL(),
+          OutputMode.Append())
+      val clock = new StreamManualClock
+
+      testStream(result)(
+        StartStream(Trigger.ProcessingTime("1 second"), triggerClock = clock),
+        AddData(inputStream, InputEvent("k1", "put", 1)),
+        AdvanceManualClock(1 * 1000),
+        AddData(inputStream, InputEvent("k1", "append", 2)),
+        AddData(inputStream, InputEvent("k1", "append", 3)),
+        // advance clock to trigger processing
+        AdvanceManualClock(1 * 1000),
+        CheckNewAnswer(),
+        // get ttl values
+        AddData(inputStream, InputEvent("k1", "get_ttl_value_from_state", -1, null)),
+        AdvanceManualClock(1 * 1000),
+        CheckNewAnswer(
+          OutputEvent("k1", 1, isTTLValue = true, 61000),
+          OutputEvent("k1", 2, isTTLValue = true, 62000),
+          OutputEvent("k1", 3, isTTLValue = true, 62000)
+        ),
+        AddData(inputStream, InputEvent("k1", "get", -1, null)),
+        AdvanceManualClock(1 * 1000),
+        CheckNewAnswer(
+          OutputEvent("k1", 1, isTTLValue = false, -1),
+          OutputEvent("k1", 2, isTTLValue = false, -1),
+          OutputEvent("k1", 3, isTTLValue = false, -1)
+        ),
+        AdvanceManualClock(45 * 1000),
+        AddData(inputStream, InputEvent("k1", "append", 4)),
+        AdvanceManualClock(1 * 1000),
+        AddData(inputStream, InputEvent("k1", "get_ttl_value_from_state", -1, null)),
+        AdvanceManualClock(1 * 1000),
+        CheckNewAnswer(
+          OutputEvent("k1", 1, isTTLValue = true, 61000),
+          OutputEvent("k1", 2, isTTLValue = true, 62000),
+          OutputEvent("k1", 3, isTTLValue = true, 62000),
+          OutputEvent("k1", 4, isTTLValue = true, 110000)
+        ),
+        // advance clock so data expires
+        AdvanceManualClock(30 * 1000),
+        // run a no data batch
+        CheckNewAnswer(),
+        AddData(inputStream, InputEvent("k1", "get_without_enforcing_ttl", -1)),
+        AdvanceManualClock(1 * 1000),
+        CheckNewAnswer(
+          OutputEvent("k1", 4, isTTLValue = false, -1)
+        ),
+        StopStream
+      )
     }
   }
 }

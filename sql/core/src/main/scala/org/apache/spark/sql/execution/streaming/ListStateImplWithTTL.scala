@@ -19,7 +19,7 @@ package org.apache.spark.sql.execution.streaming
 import org.apache.spark.sql.Encoder
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchema.{KEY_ROW_SCHEMA, VALUE_ROW_SCHEMA_WITH_TTL}
-import org.apache.spark.sql.execution.streaming.state.{NoPrefixKeyStateEncoderSpec, StateStore, StateStoreErrors}
+import org.apache.spark.sql.execution.streaming.state.{NoPrefixKeyStateEncoderSpec, StateStore}
 import org.apache.spark.sql.streaming.{ListState, TTLConfig}
 import org.apache.spark.util.NextIterator
 
@@ -49,6 +49,9 @@ class ListStateImplWithTTL[S](
 
   private val ttlExpirationMs =
     StateTTL.calculateExpirationTimeForDuration(ttlConfig.ttlDuration, batchTimestampMs)
+
+  private val listStatePutImpl = new ListStateModifyImpl[S](
+    store, stateName, keyExprEnc, valEncoder, stateTypesEncoder.encodeValue(_, ttlExpirationMs))
 
   initialize()
 
@@ -98,58 +101,25 @@ class ListStateImplWithTTL[S](
 
   /** Update the value of the list. */
   override def put(newState: Array[S]): Unit = {
-    validateNewState(newState)
-
-    val encodedKey = stateTypesEncoder.encodeGroupingKey()
-    var isFirst = true
-
-    newState.foreach { v =>
-      val encodedValue = stateTypesEncoder.encodeValue(v, ttlExpirationMs)
-      if (isFirst) {
-        store.put(encodedKey, encodedValue, stateName)
-        isFirst = false
-      } else {
-        store.merge(encodedKey, encodedValue, stateName)
-      }
-    }
-    val serializedGroupingKey = stateTypesEncoder.serializeGroupingKey()
-    upsertTTLForStateKey(ttlExpirationMs, serializedGroupingKey)
+    listStatePutImpl.put(newState)
+    upsertTTLForStateKey()
   }
 
   /** Append an entry to the list. */
   override def appendValue(newState: S): Unit = {
-    StateStoreErrors.requireNonNullStateValue(newState, stateName)
-    store.merge(stateTypesEncoder.encodeGroupingKey(),
-      stateTypesEncoder.encodeValue(newState, ttlExpirationMs), stateName)
-    val serializedGroupingKey = stateTypesEncoder.serializeGroupingKey()
-    upsertTTLForStateKey(ttlExpirationMs, serializedGroupingKey)
+    listStatePutImpl.appendValue(newState)
+    upsertTTLForStateKey()
   }
 
   /** Append an entire list to the existing value. */
   override def appendList(newState: Array[S]): Unit = {
-    validateNewState(newState)
-
-    val encodedKey = stateTypesEncoder.encodeGroupingKey()
-    newState.foreach { v =>
-      val encodedValue = stateTypesEncoder.encodeValue(v, ttlExpirationMs)
-      store.merge(encodedKey, encodedValue, stateName)
-    }
-    val serializedGroupingKey = stateTypesEncoder.serializeGroupingKey()
-    upsertTTLForStateKey(ttlExpirationMs, serializedGroupingKey)
+    listStatePutImpl.appendList(newState)
+    upsertTTLForStateKey()
   }
 
   /** Remove this state. */
   override def clear(): Unit = {
-    store.remove(stateTypesEncoder.encodeGroupingKey(), stateName)
-  }
-
-  private def validateNewState(newState: Array[S]): Unit = {
-    StateStoreErrors.requireNonNullStateValue(newState, stateName)
-    StateStoreErrors.requireNonEmptyListStateValue(newState, stateName)
-
-    newState.foreach { v =>
-      StateStoreErrors.requireNonNullStateValue(v, stateName)
-    }
+    listStatePutImpl.clear()
   }
 
   /**
@@ -174,6 +144,11 @@ class ListStateImplWithTTL[S](
         }
       }
     }
+  }
+
+  private def upsertTTLForStateKey(): Unit = {
+    val serializedGroupingKey = stateTypesEncoder.serializeGroupingKey()
+    upsertTTLForStateKey(ttlExpirationMs, serializedGroupingKey)
   }
 
   /*

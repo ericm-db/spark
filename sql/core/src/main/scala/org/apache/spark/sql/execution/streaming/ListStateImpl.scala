@@ -20,7 +20,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.sql.Encoder
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchema.{KEY_ROW_SCHEMA, VALUE_ROW_SCHEMA}
-import org.apache.spark.sql.execution.streaming.state.{NoPrefixKeyStateEncoderSpec, StateStore, StateStoreErrors}
+import org.apache.spark.sql.execution.streaming.state.{NoPrefixKeyStateEncoderSpec, StateStore}
 import org.apache.spark.sql.streaming.ListState
 
 /**
@@ -43,6 +43,9 @@ class ListStateImpl[S](
   private val keySerializer = keyExprEnc.createSerializer()
 
   private val stateTypesEncoder = StateTypesEncoder(keySerializer, valEncoder, stateName)
+
+  private val listStateModifyImpl = new ListStateModifyImpl[S](
+    store, stateName, keyExprEnc, valEncoder, stateTypesEncoder.encodeValue)
 
   store.createColFamilyIfAbsent(stateName, KEY_ROW_SCHEMA, VALUE_ROW_SCHEMA,
     NoPrefixKeyStateEncoderSpec(KEY_ROW_SCHEMA), useMultipleValuesPerKey = true)
@@ -75,51 +78,21 @@ class ListStateImpl[S](
 
    /** Update the value of the list. */
    override def put(newState: Array[S]): Unit = {
-     validateNewState(newState)
-
-     val encodedKey = stateTypesEncoder.encodeGroupingKey()
-     var isFirst = true
-
-     newState.foreach { v =>
-       val encodedValue = stateTypesEncoder.encodeValue(v)
-       if (isFirst) {
-         store.put(encodedKey, encodedValue, stateName)
-         isFirst = false
-       } else {
-          store.merge(encodedKey, encodedValue, stateName)
-       }
-     }
+     listStateModifyImpl.put(newState)
    }
 
    /** Append an entry to the list. */
    override def appendValue(newState: S): Unit = {
-     StateStoreErrors.requireNonNullStateValue(newState, stateName)
-     store.merge(stateTypesEncoder.encodeGroupingKey(),
-         stateTypesEncoder.encodeValue(newState), stateName)
+     listStateModifyImpl.appendValue(newState)
    }
 
    /** Append an entire list to the existing value. */
    override def appendList(newState: Array[S]): Unit = {
-     validateNewState(newState)
-
-     val encodedKey = stateTypesEncoder.encodeGroupingKey()
-     newState.foreach { v =>
-       val encodedValue = stateTypesEncoder.encodeValue(v)
-       store.merge(encodedKey, encodedValue, stateName)
-     }
+     listStateModifyImpl.appendList(newState)
    }
 
    /** Remove this state. */
    override def clear(): Unit = {
-     store.remove(stateTypesEncoder.encodeGroupingKey(), stateName)
-   }
-
-   private def validateNewState(newState: Array[S]): Unit = {
-     StateStoreErrors.requireNonNullStateValue(newState, stateName)
-     StateStoreErrors.requireNonEmptyListStateValue(newState, stateName)
-
-     newState.foreach { v =>
-       StateStoreErrors.requireNonNullStateValue(v, stateName)
-     }
+     listStateModifyImpl.clear()
    }
  }

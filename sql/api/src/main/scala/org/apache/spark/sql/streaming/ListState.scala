@@ -44,3 +44,23 @@ private[sql] trait ListState[S] extends Serializable {
   /** Removes this state for the given grouping key. */
   def clear(): Unit
 }
+
+/**
+ * Interface used for arbitrary stateful operations with the v2 API to capture
+ * list value state.
+ */
+private[sql] trait ListStateModify[S] extends Serializable {
+
+  /** Update the value of the list. */
+  def put(newState: Array[S]): Unit
+
+  /** Append an entry to the list */
+  def appendValue(newState: S): Unit
+
+  /** Append an entire list to the existing value */
+  def appendList(newState: Array[S]): Unit
+
+  /** Removes this state for the given grouping key. */
+  def clear(): Unit
+}
+
