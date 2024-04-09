@@ -18,7 +18,6 @@ package org.apache.spark.sql.execution.streaming
 
 import org.apache.spark.sql.Encoder
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
-import org.apache.spark.sql.catalyst.expressions.UnsafeRow
 import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchema.{KEY_ROW_SCHEMA, VALUE_ROW_SCHEMA_WITH_TTL}
 import org.apache.spark.sql.execution.streaming.state.{NoPrefixKeyStateEncoderSpec, StateStore, StateStoreErrors}
 import org.apache.spark.sql.streaming.{ListState, TTLConfig}
@@ -76,12 +75,12 @@ class ListStateImplWithTTL[S](
 
       override protected def getNext(): S = {
         unsafeRowValuesIterator.dropWhile { row =>
-          isExpired(row)
+          stateTypesEncoder.isExpired(row, batchTimestampMs)
         }
 
         if (unsafeRowValuesIterator.hasNext) {
           val currentRow = unsafeRowValuesIterator.next()
-          if (!isExpired(currentRow)) {
+          if (!stateTypesEncoder.isExpired(currentRow, batchTimestampMs)) {
             stateTypesEncoder.decodeValue(currentRow)
           } else {
             finished = true
@@ -166,7 +165,7 @@ class ListStateImplWithTTL[S](
     store.remove(encodedGroupingKey, stateName)
     var isFirst = true
     unsafeRowValuesIterator.foreach { encodedValue =>
-      if (!isExpired(encodedValue)) {
+      if (!stateTypesEncoder.isExpired(encodedValue, batchTimestampMs)) {
         if (isFirst) {
           store.put(encodedGroupingKey, encodedValue, stateName)
           isFirst = false
@@ -177,10 +176,6 @@ class ListStateImplWithTTL[S](
     }
   }
 
-  private def isExpired(valueRow: UnsafeRow): Boolean = {
-    val expirationMs = stateTypesEncoder.decodeTtlExpirationMs(valueRow)
-    expirationMs.exists(StateTTL.isExpired(_, batchTimestampMs))
-  }
   /*
     * Internal methods to probe state for testing. The below methods exist for unit tests
     * to read the state ttl values, and ensure that values are persisted correctly in

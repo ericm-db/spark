@@ -18,7 +18,6 @@ package org.apache.spark.sql.execution.streaming
 
 import org.apache.spark.sql.Encoder
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
-import org.apache.spark.sql.catalyst.expressions.UnsafeRow
 import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchema.{KEY_ROW_SCHEMA, VALUE_ROW_SCHEMA_WITH_TTL}
 import org.apache.spark.sql.execution.streaming.state.{NoPrefixKeyStateEncoderSpec, StateStore}
 import org.apache.spark.sql.streaming.{TTLConfig, ValueState}
@@ -75,7 +74,7 @@ class ValueStateImplWithTTL[S](
     if (retRow != null) {
       val resState = stateTypesEncoder.decodeValue(retRow)
 
-      if (!isExpired(retRow)) {
+      if (!stateTypesEncoder.isExpired(retRow, batchTimestampMs)) {
         resState
       } else {
         null.asInstanceOf[S]
@@ -104,15 +103,10 @@ class ValueStateImplWithTTL[S](
     val retRow = store.get(encodedGroupingKey, stateName)
 
     if (retRow != null) {
-      if (isExpired(retRow)) {
+      if (stateTypesEncoder.isExpired(retRow, batchTimestampMs)) {
         store.remove(encodedGroupingKey, stateName)
       }
     }
-  }
-
-  private def isExpired(valueRow: UnsafeRow): Boolean = {
-    val expirationMs = stateTypesEncoder.decodeTtlExpirationMs(valueRow)
-    expirationMs.exists(StateTTL.isExpired(_, batchTimestampMs))
   }
 
   /*
