@@ -141,14 +141,15 @@ class ValueStateImplWithTTL[S](
   /**
    * Read the ttl value associated with the grouping key.
    */
-  private[sql] def getTTLValue(): Option[Long] = {
+  private[sql] def getTTLValue(): Option[(S, Long)] = {
     val encodedGroupingKey = stateTypesEncoder.encodeGroupingKey()
     val retRow = store.get(encodedGroupingKey, stateName)
 
-    if (retRow != null) {
-      stateTypesEncoder.decodeTtlExpirationMs(retRow)
-    } else {
-      None
+    // if the returned row is not null, we want to return the value associated with the
+    // ttlExpiration
+    Option(retRow).flatMap { row =>
+      val ttlExpiration = stateTypesEncoder.decodeTtlExpirationMs(row)
+      ttlExpiration.map(expiration => (stateTypesEncoder.decodeValue(row), expiration))
     }
   }
 

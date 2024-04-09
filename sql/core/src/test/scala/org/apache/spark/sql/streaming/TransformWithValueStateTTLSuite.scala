@@ -153,7 +153,7 @@ class TransformWithValueStateTTLSuite extends TransformWithStateTTLTest {
         AddData(inputStream, InputEvent(ttlKey, "get_ttl_value_from_state", -1)),
         AddData(inputStream, InputEvent(noTtlKey, "get_ttl_value_from_state", -1)),
         AdvanceManualClock(1 * 1000),
-        CheckNewAnswer(OutputEvent(ttlKey, -1, isTTLValue = true, 61000)),
+        CheckNewAnswer(OutputEvent(ttlKey, 1, isTTLValue = true, 61000)),
         AddData(inputStream, InputEvent(ttlKey, "get_values_in_ttl_state", -1)),
         AddData(inputStream, InputEvent(noTtlKey, "get_values_in_ttl_state", -1)),
         AdvanceManualClock(1 * 1000),

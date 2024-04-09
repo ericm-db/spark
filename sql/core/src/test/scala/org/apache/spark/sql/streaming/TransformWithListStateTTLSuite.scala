@@ -75,9 +75,9 @@ class ListStateTTLProcessor(ttlConfig: TTLConfig)
         results = OutputEvent(key, v, isTTLValue = false, -1) :: results
       }
     } else if (row.action == "get_ttl_value_from_state") {
-      val ttlExpiration = listState.getTTLValues()
-      ttlExpiration.foreach { ttlExpiration =>
-        results = OutputEvent(key, -1, isTTLValue = true, ttlExpiration) :: results
+      val ttlValues = listState.getTTLValues()
+      ttlValues.foreach { ttlValue =>
+        results = OutputEvent(key, ttlValue._1, isTTLValue = true, ttlValue._2) :: results
       }
     } else if (row.action == "put") {
       listState.put(Array(row.value))
@@ -132,9 +132,9 @@ class TransformWithListStateTTLSuite extends TransformWithStateTTLTest {
           AddData(inputStream, InputEvent("k1", "get_ttl_value_from_state", -1, null)),
           AdvanceManualClock(1 * 1000),
           CheckNewAnswer(
-            OutputEvent("k1", -1, isTTLValue = true, 181000),
-            OutputEvent("k1", -1, isTTLValue = true, 182000),
-            OutputEvent("k1", -1, isTTLValue = true, 182000)
+            OutputEvent("k1", 1, isTTLValue = true, 181000),
+            OutputEvent("k1", 2, isTTLValue = true, 182000),
+            OutputEvent("k1", 3, isTTLValue = true, 182000)
           ),
           AddData(inputStream, InputEvent("k1", "get", -1, null)),
           AdvanceManualClock(1 * 1000),
@@ -248,9 +248,9 @@ class TransformWithListStateTTLSuite extends TransformWithStateTTLTest {
           AddData(inputStream, InputEvent("k1", "get_ttl_value_from_state", -1, null)),
           AdvanceManualClock(1 * 1000),
           CheckNewAnswer(
-            OutputEvent("k1", -1, isTTLValue = true, 61000),
-            OutputEvent("k1", -1, isTTLValue = true, 62000),
-            OutputEvent("k1", -1, isTTLValue = true, 62000)
+            OutputEvent("k1", 1, isTTLValue = true, 61000),
+            OutputEvent("k1", 2, isTTLValue = true, 62000),
+            OutputEvent("k1", 3, isTTLValue = true, 62000)
           ),
           AddData(inputStream, InputEvent("k1", "get", -1, null)),
           AdvanceManualClock(1 * 1000),
@@ -276,12 +276,12 @@ class TransformWithListStateTTLSuite extends TransformWithStateTTLTest {
           AddData(inputStream, InputEvent("k1", "get_ttl_value_from_state", -1, null)),
           AdvanceManualClock(1 * 1000),
           CheckNewAnswer(
-            OutputEvent("k1", -1, isTTLValue = true, 61000),
-            OutputEvent("k1", -1, isTTLValue = true, 62000),
-            OutputEvent("k1", -1, isTTLValue = true, 62000),
-            OutputEvent("k1", -1, isTTLValue = true, 125000),
-            OutputEvent("k1", -1, isTTLValue = true, 125000),
-            OutputEvent("k1", -1, isTTLValue = true, 125000)
+            OutputEvent("k1", 1, isTTLValue = true, 61000),
+            OutputEvent("k1", 2, isTTLValue = true, 62000),
+            OutputEvent("k1", 3, isTTLValue = true, 62000),
+            OutputEvent("k1", 4, isTTLValue = true, 125000),
+            OutputEvent("k1", 5, isTTLValue = true, 125000),
+            OutputEvent("k1", 6, isTTLValue = true, 125000)
           ),
           // expire beginning values
           AdvanceManualClock(60 * 1000),

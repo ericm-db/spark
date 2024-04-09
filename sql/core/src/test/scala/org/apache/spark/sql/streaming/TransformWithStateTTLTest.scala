@@ -54,9 +54,11 @@ object TTLInputProcessFunction {
         results = OutputEvent(key, currState.get, isTTLValue = false, -1) :: results
       }
     } else if (row.action == "get_ttl_value_from_state") {
-      val ttlExpiration = valueState.getTTLValue()
-      if (ttlExpiration.isDefined) {
-        results = OutputEvent(key, -1, isTTLValue = true, ttlExpiration.get) :: results
+      val ttlValue = valueState.getTTLValue()
+      if (ttlValue.isDefined) {
+        val value = ttlValue.get._1
+        val ttlExpiration = ttlValue.get._2
+        results = OutputEvent(key, value, isTTLValue = true, ttlExpiration) :: results
       }
     } else if (row.action == "put") {
       valueState.update(row.value)
@@ -139,7 +141,7 @@ abstract class TransformWithStateTTLTest
           // ensure ttl values were added correctly
           AddData(inputStream, InputEvent("k1", "get_ttl_value_from_state", -1)),
           AdvanceManualClock(1 * 1000),
-          CheckNewAnswer(OutputEvent("k1", -1, isTTLValue = true, 61000)),
+          CheckNewAnswer(OutputEvent("k1", 1, isTTLValue = true, 61000)),
           AddData(inputStream, InputEvent("k1", "get_values_in_ttl_state", -1)),
           AdvanceManualClock(1 * 1000),
           CheckNewAnswer(OutputEvent("k1", -1, isTTLValue = true, 61000)),
@@ -193,7 +195,7 @@ abstract class TransformWithStateTTLTest
         // ensure ttl values were added correctly
         AddData(inputStream, InputEvent("k1", "get_ttl_value_from_state", -1)),
         AdvanceManualClock(1 * 1000),
-        CheckNewAnswer(OutputEvent("k1", -1, isTTLValue = true, 61000)),
+        CheckNewAnswer(OutputEvent("k1", 1, isTTLValue = true, 61000)),
         AddData(inputStream, InputEvent("k1", "get_values_in_ttl_state", -1)),
         AdvanceManualClock(1 * 1000),
         CheckNewAnswer(OutputEvent("k1", -1, isTTLValue = true, 61000)),
@@ -208,7 +210,7 @@ abstract class TransformWithStateTTLTest
         // validate ttl value is updated in the state
         AddData(inputStream, InputEvent("k1", "get_ttl_value_from_state", -1)),
         AdvanceManualClock(1 * 1000),
-        CheckNewAnswer(OutputEvent("k1", -1, isTTLValue = true, 95000)),
+        CheckNewAnswer(OutputEvent("k1", 1, isTTLValue = true, 95000)),
         // validate ttl state has both ttl values present
         AddData(inputStream, InputEvent("k1", "get_values_in_ttl_state", -1)),
         AdvanceManualClock(1 * 1000),
@@ -258,7 +260,7 @@ abstract class TransformWithStateTTLTest
         // ensure ttl values were added correctly
         AddData(inputStream, InputEvent("k1", "get_ttl_value_from_state", -1)),
         AdvanceManualClock(1 * 1000),
-        CheckNewAnswer(OutputEvent("k1", -1, isTTLValue = true, 61000)),
+        CheckNewAnswer(OutputEvent("k1", 1, isTTLValue = true, 61000)),
         AddData(inputStream, InputEvent("k1", "get_values_in_ttl_state", -1)),
         AdvanceManualClock(1 * 1000),
         CheckNewAnswer(OutputEvent("k1", -1, isTTLValue = true, 61000)),
@@ -325,7 +327,7 @@ abstract class TransformWithStateTTLTest
         AdvanceManualClock(1 * 1000),
         CheckNewAnswer(
           OutputEvent("k2", -1, isTTLValue = true, 92000),
-          OutputEvent("k2", -1, isTTLValue = true, 92000))
+          OutputEvent("k2", 2, isTTLValue = true, 92000))
       )
     }
   }
