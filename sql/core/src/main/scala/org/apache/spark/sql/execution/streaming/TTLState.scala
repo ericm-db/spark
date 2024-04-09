@@ -18,7 +18,6 @@ package org.apache.spark.sql.execution.streaming
 
 import java.time.Duration
 
-import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.UnsafeProjection
 import org.apache.spark.sql.execution.streaming.state.{RangeKeyScanStateEncoderSpec, StateStore}
@@ -82,7 +81,7 @@ abstract class SingleKeyTTLStateImpl(
     stateName: String,
     store: StateStore,
     ttlExpirationMs: Long)
-  extends TTLState with Logging {
+  extends TTLState {
 
   import org.apache.spark.sql.execution.streaming.StateTTLSchema._
 
@@ -139,7 +138,7 @@ abstract class SingleKeyTTLStateImpl(
 /**
  * Helper methods for user State TTL.
  */
-object StateTTL extends Logging {
+object StateTTL {
   def calculateExpirationTimeForDuration(
       ttlDuration: Duration,
       batchTtlExpirationMs: Long): Long = {

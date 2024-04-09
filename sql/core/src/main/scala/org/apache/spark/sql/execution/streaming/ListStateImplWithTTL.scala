@@ -16,7 +16,6 @@
  */
 package org.apache.spark.sql.execution.streaming
 
-import org.apache.spark.internal.Logging
 import org.apache.spark.sql.Encoder
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.catalyst.expressions.UnsafeRow
@@ -42,7 +41,7 @@ class ListStateImplWithTTL[S](
   valEncoder: Encoder[S],
   ttlConfig: TTLConfig,
   batchTimestampMs: Long)
-  extends SingleKeyTTLStateImpl(stateName, store, batchTimestampMs) with ListState[S] with Logging {
+  extends SingleKeyTTLStateImpl(stateName, store, batchTimestampMs) with ListState[S] {
 
   private val keySerializer = keyExprEnc.createSerializer()
 
@@ -71,27 +70,27 @@ class ListStateImplWithTTL[S](
    */
   override def get(): Iterator[S] = {
     val encodedKey = stateTypesEncoder.encodeGroupingKey()
-
     val unsafeRowValuesIterator = store.valuesIterator(encodedKey, stateName)
 
     new NextIterator[S] {
-      private var currentRow: UnsafeRow = _
 
       override protected def getNext(): S = {
+        unsafeRowValuesIterator.dropWhile { row =>
+          isExpired(row)
+        }
+
         if (unsafeRowValuesIterator.hasNext) {
-          currentRow = unsafeRowValuesIterator.next()
-          while (unsafeRowValuesIterator.hasNext && isExpired(currentRow)) {
-            currentRow = unsafeRowValuesIterator.next()
-          }
-          // in this case, we have iterated to the end, and there are no
-          // non-expired values
-          if (currentRow != null && isExpired(currentRow)) {
-            currentRow = null
+          val currentRow = unsafeRowValuesIterator.next()
+          if (!isExpired(currentRow)) {
+            stateTypesEncoder.decodeValue(currentRow)
+          } else {
+            finished = true
+            null.asInstanceOf[S]
           }
         } else {
           finished = true
+          null.asInstanceOf[S]
         }
-        if (currentRow != null) stateTypesEncoder.decodeValue(currentRow) else null.asInstanceOf[S]
       }
 
       override protected def close(): Unit = {}
