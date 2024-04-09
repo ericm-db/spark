@@ -46,8 +46,8 @@ private[sql] trait ListState[S] extends Serializable {
 }
 
 /**
- * Interface used for arbitrary stateful operations with the v2 API to capture
- * list value state.
+ * Interface for shared methods between ListStateImpl and ListStateImplWithTTL
+ * that modify the state of a list
  */
 private[sql] trait ListStateModify[S] extends Serializable {
 
