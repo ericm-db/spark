@@ -221,17 +221,17 @@ class ListStateImplWithTTL[S](
   /**
    * Read the ttl value associated with the grouping key.
    */
-  private[sql] def getTTLValues(): Iterator[Option[Long]] = {
+  private[sql] def getTTLValues(): Iterator[Long] = {
     val encodedGroupingKey = stateTypesEncoder.encodeGroupingKey()
     val unsafeRowValuesIterator = store.valuesIterator(encodedGroupingKey, stateName)
-    new Iterator[Option[Long]] {
+    new Iterator[Long] {
       override def hasNext: Boolean = {
         unsafeRowValuesIterator.hasNext
       }
 
-      override def next(): Option[Long] = {
+      override def next(): Long = {
         val valueUnsafeRow = unsafeRowValuesIterator.next()
-        stateTypesEncoder.decodeTtlExpirationMs(valueUnsafeRow)
+        stateTypesEncoder.decodeTtlExpirationMs(valueUnsafeRow).get
       }
     }
   }

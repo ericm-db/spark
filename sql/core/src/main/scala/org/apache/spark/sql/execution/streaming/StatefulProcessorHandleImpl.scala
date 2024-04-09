@@ -227,7 +227,7 @@ class StatefulProcessorHandleImpl(
 
   override def getListState[T](stateName: String, valEncoder: Encoder[T]): ListState[T] = {
     verifyStateVarOperations("get_list_state")
-    val resultState = new ListStateImplWithoutTTL[T](store, stateName, keyEncoder, valEncoder)
+    val resultState = new ListStateImpl[T](store, stateName, keyEncoder, valEncoder)
     resultState
   }
 
