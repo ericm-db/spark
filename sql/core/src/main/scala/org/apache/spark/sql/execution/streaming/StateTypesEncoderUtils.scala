@@ -27,6 +27,9 @@ import org.apache.spark.sql.types.{BinaryType, LongType, StructType}
 
 object TransformWithStateKeyValueRowSchema {
   val KEY_ROW_SCHEMA: StructType = new StructType().add("key", BinaryType)
+  val COMPOSITE_KEY_ROW_SCHEMA: StructType = new StructType()
+    .add("key", BinaryType)
+    .add("userKey", BinaryType)
   val VALUE_ROW_SCHEMA: StructType = new StructType()
     .add("value", BinaryType)
   val VALUE_ROW_SCHEMA_WITH_TTL: StructType = new StructType()
@@ -192,6 +195,21 @@ class CompositeKeyStateEncoder[GK, K, V](
     compositeKeyRow
   }
 
+
+  /**
+   * Grouping key and user key are encoded as a row of `schemaForCompositeKeyRow` schema.
+   * Grouping key will be encoded in `RocksDBStateEncoder` as the prefix column.
+   */
+  def encodeCompositeKey(
+    groupingKeyByteArr: Array[Byte],
+    userKeyByteArr: Array[Byte]): UnsafeRow = {
+    val compositeKeyRow = compositeKeyProjection(InternalRow(groupingKeyByteArr, userKeyByteArr))
+    compositeKeyRow
+  }
+
+  def serializeUserKey(userKey: K): Array[Byte] = {
+    userKeySerializer.apply(userKey).asInstanceOf[UnsafeRow].getBytes
+  }
   /**
    * The input row is of composite Key schema.
    * Only user key is returned though grouping key also exist in the row.
