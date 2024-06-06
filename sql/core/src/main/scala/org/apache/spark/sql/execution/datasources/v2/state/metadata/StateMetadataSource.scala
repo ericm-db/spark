@@ -31,8 +31,8 @@ import org.apache.spark.sql.connector.expressions.Transform
 import org.apache.spark.sql.connector.read.{Batch, InputPartition, PartitionReader, PartitionReaderFactory, Scan, ScanBuilder}
 import org.apache.spark.sql.execution.datasources.v2.state.StateDataSourceErrors
 import org.apache.spark.sql.execution.datasources.v2.state.StateSourceOptions.PATH
-import org.apache.spark.sql.execution.streaming.CheckpointFileManager
-import org.apache.spark.sql.execution.streaming.state.{OperatorStateMetadata, OperatorStateMetadataReader, OperatorStateMetadataV1}
+import org.apache.spark.sql.execution.streaming.{CheckpointFileManager, OperatorStateMetadataLog}
+import org.apache.spark.sql.execution.streaming.state.{OperatorStateMetadata, OperatorStateMetadataV1}
 import org.apache.spark.sql.sources.DataSourceRegister
 import org.apache.spark.sql.types.{DataType, IntegerType, LongType, StringType, StructType}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
@@ -55,7 +55,8 @@ case class StateMetadataTableEntry(
         numPartitions,
         minBatchId,
         maxBatchId,
-        numColsPrefixKey))
+        numColsPrefixKey
+      ))
   }
 }
 
@@ -193,8 +194,11 @@ class StateMetadataPartitionReader(
     val opIds = fileManager
       .list(stateDir, pathNameCanBeParsedAsLongFilter).map(f => pathToLong(f.getPath)).sorted
     opIds.map { opId =>
-      new OperatorStateMetadataReader(new Path(stateDir, opId.toString), hadoopConf).read()
-    }
+      val dirLocation = new Path(stateDir, opId.toString)
+      val metadataFilePath = OperatorStateMetadata.metadataFilePath(dirLocation)
+      val log = new OperatorStateMetadataLog(SparkSession.active, metadataFilePath.toString)
+      log.getLatest()
+    }.filter(_.isDefined).map(_.get._2)
   }
 
   private[state] lazy val stateMetadata: Iterator[StateMetadataTableEntry] = {
