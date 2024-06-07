@@ -19,6 +19,14 @@ package org.apache.spark.sql.execution.streaming
 import java.util.UUID
 import java.util.concurrent.TimeUnit.NANOSECONDS
 
+import scala.jdk.CollectionConverters.CollectionHasAsScala
+
+import org.json4s.{DefaultFormats, JArray, JString}
+import org.json4s.JsonAST.JValue
+import org.json4s.JsonDSL._
+import org.json4s.jackson.JsonMethods
+import org.json4s.jackson.JsonMethods.{compact, render}
+
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
@@ -75,7 +83,31 @@ case class TransformWithStateExec(
     initialState: SparkPlan)
   extends BinaryExecNode with StateStoreWriter with WatermarkSupport with ObjectProducerExec {
 
+  val operatorProperties: OperatorProperties =
+    OperatorProperties.create(
+      sparkContext,
+      "colFamilyMetadata"
+    )
+
+  override def operatorStateMetadataVersion: Int = 2
+
   override def shortName: String = "transformWithStateExec"
+
+
+  /** Metadata of this stateful operator and its states stores. */
+  override def operatorStateMetadata(): OperatorStateMetadata = {
+    val info = getStateInfo
+    val operatorInfo = OperatorInfoV1(info.operatorId, shortName)
+    val stateStoreInfo =
+      Array(StateStoreMetadataV1(StateStoreId.DEFAULT_STORE_NAME, 0, info.numPartitions))
+
+    val operatorPropertiesJson: JValue = ("timeMode" -> JString(timeMode.toString)) ~
+      ("outputMode" -> JString(outputMode.toString)) ~
+      ("stateVariables" -> operatorProperties.value.get("stateVariables"))
+
+    val json = compact(render(operatorPropertiesJson))
+    OperatorStateMetadataV2(operatorInfo, stateStoreInfo, json)
+  }
 
   override def shouldRunAnotherBatch(newInputWatermark: Long): Boolean = {
     if (timeMode == ProcessingTime) {
@@ -306,6 +338,9 @@ case class TransformWithStateExec(
           store.abort()
         }
       }
+      operatorProperties.add(Map
+      ("stateVariables" -> JArray(processorHandle.stateVariables.
+        asScala.map(_.jsonValue).toList)))
       setStoreMetrics(store)
       setOperatorMetrics()
       statefulProcessor.close()
@@ -560,6 +595,14 @@ object TransformWithStateExec {
       initialStateDataAttrs,
       initialStateDeserializer,
       initialState)
+  }
+
+  def deserializeOperatorProperties(json: String): Map[String, Any] = {
+    val parsedJson = JsonMethods.parse(json)
+
+    implicit val formats = DefaultFormats
+    val deserializedMap: Map[String, Any] = parsedJson.extract[Map[String, Any]]
+    deserializedMap
   }
 }
 // scalastyle:on argcount

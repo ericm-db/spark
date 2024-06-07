@@ -24,6 +24,7 @@ import org.apache.spark.SparkRuntimeException
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.{Dataset, Encoders}
 import org.apache.spark.sql.catalyst.util.stringToFile
+import org.apache.spark.sql.execution.datasources.v2.state.StateSourceOptions
 import org.apache.spark.sql.execution.streaming._
 import org.apache.spark.sql.execution.streaming.state.{AlsoTestWithChangelogCheckpointingEnabled, RocksDBStateStoreProvider, StatefulProcessorCannotPerformOperationWithInvalidHandleState, StateStoreMultipleColumnFamiliesNotSupportedException}
 import org.apache.spark.sql.functions.timestamp_seconds
@@ -445,6 +446,75 @@ class TransformWithStateSuite extends StateStoreMetricsTest
         // two times here and produced ("a", "-1") two times.
         StopStream
       )
+    }
+  }
+
+  test("verify that operatorProperties contain all stateVariables") {
+    withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
+      classOf[RocksDBStateStoreProvider].getName) {
+      withTempDir { chkptDir =>
+        val clock = new StreamManualClock
+
+        val inputData = MemoryStream[String]
+        val result = inputData.toDS()
+          .groupByKey(x => x)
+          .transformWithState(new RunningCountStatefulProcessorWithProcTimeTimer(),
+            TimeMode.ProcessingTime(),
+            OutputMode.Update())
+
+        testStream(result, OutputMode.Update())(
+          StartStream(
+            Trigger.ProcessingTime("1 second"),
+            triggerClock = clock,
+            checkpointLocation = chkptDir.getCanonicalPath
+          ),
+          AddData(inputData, "a"),
+          AdvanceManualClock(1 * 1000),
+          CheckNewAnswer(("a", "1")),
+          Execute { q =>
+            assert(q.lastProgress.stateOperators(0).customMetrics.get("numValueStateVars") > 0)
+            assert(q.lastProgress.stateOperators(0).customMetrics.get("numRegisteredTimers") === 1)
+          },
+          AddData(inputData, "b"),
+          AdvanceManualClock(1 * 1000),
+          CheckNewAnswer(("b", "1")),
+
+          AddData(inputData, "b"),
+          AdvanceManualClock(10 * 1000),
+          CheckNewAnswer(("a", "-1"), ("b", "2")),
+
+          AddData(inputData, "b"),
+          AddData(inputData, "c"),
+          AdvanceManualClock(1 * 1000),
+          CheckNewAnswer(("c", "1")), // should remove 'b' as count reaches 3
+
+          AddData(inputData, "d"),
+          AdvanceManualClock(10 * 1000),
+          CheckNewAnswer(("c", "-1"), ("d", "1")),
+          StopStream
+        )
+
+        val df = spark.read
+          .format("state-metadata")
+          .option(StateSourceOptions.PATH, chkptDir.getAbsolutePath)
+          .load()
+
+        val propsString = df.select("operatorProperties").
+          collect().head.getString(0)
+
+        val map = TransformWithStateExec.
+          deserializeOperatorProperties(propsString)
+        assert(map("timeMode") === "ProcessingTime")
+        assert(map("outputMode") === "Update")
+
+        val stateVariableInfos = StateVariableInfo.fromJson(
+          map("stateVariables"))
+        assert(stateVariableInfos.size === 1)
+        val stateVariableInfo = stateVariableInfos.head
+        assert(stateVariableInfo.stateName === "countState")
+        assert(stateVariableInfo.isTtlEnabled === false)
+        assert(stateVariableInfo.stateType === ValueState)
+      }
     }
   }
 

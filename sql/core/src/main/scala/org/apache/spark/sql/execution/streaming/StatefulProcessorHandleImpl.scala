@@ -94,6 +94,9 @@ class StatefulProcessorHandleImpl(
    */
   private[sql] val ttlStates: util.List[TTLState] = new util.ArrayList[TTLState]()
 
+  private[sql] val stateVariables: util.List[StateVariableInfo] =
+    new util.ArrayList[StateVariableInfo]()
+
   private val BATCH_QUERY_ID = "00000000-0000-0000-0000-000000000000"
 
   private def buildQueryInfo(): QueryInfo = {
@@ -131,6 +134,7 @@ class StatefulProcessorHandleImpl(
     verifyStateVarOperations("get_value_state")
     incrementMetric("numValueStateVars")
     val resultState = new ValueStateImpl[T](store, stateName, keyEncoder, valEncoder)
+    stateVariables.add(new StateVariableInfo(stateName, ValueState, false))
     resultState
   }
 
@@ -146,6 +150,7 @@ class StatefulProcessorHandleImpl(
       keyEncoder, valEncoder, ttlConfig, batchTimestampMs.get)
     incrementMetric("numValueStateWithTTLVars")
     ttlStates.add(valueStateWithTTL)
+    stateVariables.add(new StateVariableInfo(stateName, ValueState, true))
     valueStateWithTTL
   }
 
@@ -242,6 +247,7 @@ class StatefulProcessorHandleImpl(
     verifyStateVarOperations("get_list_state")
     incrementMetric("numListStateVars")
     val resultState = new ListStateImpl[T](store, stateName, keyEncoder, valEncoder)
+    stateVariables.add(new StateVariableInfo(stateName, ListState, false))
     resultState
   }
 
@@ -273,7 +279,7 @@ class StatefulProcessorHandleImpl(
       keyEncoder, valEncoder, ttlConfig, batchTimestampMs.get)
     incrementMetric("numListStateWithTTLVars")
     ttlStates.add(listStateWithTTL)
-
+    stateVariables.add(new StateVariableInfo(stateName, ListState, true))
     listStateWithTTL
   }
 
@@ -284,6 +290,7 @@ class StatefulProcessorHandleImpl(
     verifyStateVarOperations("get_map_state")
     incrementMetric("numMapStateVars")
     val resultState = new MapStateImpl[K, V](store, stateName, keyEncoder, userKeyEnc, valEncoder)
+    stateVariables.add(new StateVariableInfo(stateName, MapState, false))
     resultState
   }
 
@@ -300,7 +307,7 @@ class StatefulProcessorHandleImpl(
       valEncoder, ttlConfig, batchTimestampMs.get)
     incrementMetric("numMapStateWithTTLVars")
     ttlStates.add(mapStateWithTTL)
-
+    stateVariables.add(new StateVariableInfo(stateName, MapState, true))
     mapStateWithTTL
   }
 

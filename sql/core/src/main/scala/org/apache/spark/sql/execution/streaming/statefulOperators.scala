@@ -140,6 +140,8 @@ trait StateStoreWriter extends StatefulOperator with PythonSQLMetrics { self: Sp
    */
   def produceOutputWatermark(inputWatermarkMs: Long): Option[Long] = Some(inputWatermarkMs)
 
+  def operatorStateMetadataVersion: Int = 1
+
   override lazy val metrics = statefulOperatorCustomMetrics ++ Map(
     "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
     "numRowsDroppedByWatermark" -> SQLMetrics.createMetric(sparkContext,
