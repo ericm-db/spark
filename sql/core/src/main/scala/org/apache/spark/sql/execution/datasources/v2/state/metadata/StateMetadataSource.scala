@@ -32,7 +32,7 @@ import org.apache.spark.sql.connector.read.{Batch, InputPartition, PartitionRead
 import org.apache.spark.sql.execution.datasources.v2.state.StateDataSourceErrors
 import org.apache.spark.sql.execution.datasources.v2.state.StateSourceOptions.PATH
 import org.apache.spark.sql.execution.streaming.{CheckpointFileManager, OperatorStateMetadataLog}
-import org.apache.spark.sql.execution.streaming.state.{OperatorStateMetadata, OperatorStateMetadataV1}
+import org.apache.spark.sql.execution.streaming.state.{OperatorStateMetadata, OperatorStateMetadataV1, OperatorStateMetadataV2}
 import org.apache.spark.sql.sources.DataSourceRegister
 import org.apache.spark.sql.types.{DataType, IntegerType, LongType, StringType, StructType}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
@@ -46,6 +46,7 @@ case class StateMetadataTableEntry(
     numPartitions: Int,
     minBatchId: Long,
     maxBatchId: Long,
+    operatorPropertiesJson: String,
     numColsPrefixKey: Int) {
   def toRow(): InternalRow = {
     new GenericInternalRow(
@@ -55,6 +56,7 @@ case class StateMetadataTableEntry(
         numPartitions,
         minBatchId,
         maxBatchId,
+        UTF8String.fromString(operatorPropertiesJson),
         numColsPrefixKey
       ))
   }
@@ -69,6 +71,7 @@ object StateMetadataTableEntry {
       .add("numPartitions", IntegerType)
       .add("minBatchId", LongType)
       .add("maxBatchId", LongType)
+      .add("operatorProperties", StringType)
   }
 }
 
@@ -196,22 +199,26 @@ class StateMetadataPartitionReader(
     opIds.map { opId =>
       val dirLocation = new Path(stateDir, opId.toString)
       val metadataFilePath = OperatorStateMetadata.metadataFilePath(dirLocation)
-      val log = new OperatorStateMetadataLog(SparkSession.active, metadataFilePath.toString)
+      val log = new OperatorStateMetadataLog(hadoopConf, metadataFilePath.toString)
       log.getLatest()
     }.filter(_.isDefined).map(_.get._2)
   }
 
   private[state] lazy val stateMetadata: Iterator[StateMetadataTableEntry] = {
     allOperatorStateMetadata.flatMap { operatorStateMetadata =>
-      require(operatorStateMetadata.version == 1)
-      val operatorStateMetadataV1 = operatorStateMetadata.asInstanceOf[OperatorStateMetadataV1]
-      operatorStateMetadataV1.stateStoreInfo.map { stateStoreMetadata =>
-        StateMetadataTableEntry(operatorStateMetadataV1.operatorInfo.operatorId,
-          operatorStateMetadataV1.operatorInfo.operatorName,
+      require(operatorStateMetadata.version == 1 || operatorStateMetadata.version == 2)
+      val operatorProperties = operatorStateMetadata match {
+        case _: OperatorStateMetadataV1 => ""
+        case v2: OperatorStateMetadataV2 => v2.operatorPropertiesJson
+      }
+      operatorStateMetadata.stateStoreInfo.map { stateStoreMetadata =>
+        StateMetadataTableEntry(operatorStateMetadata.operatorInfo.operatorId,
+          operatorStateMetadata.operatorInfo.operatorName,
           stateStoreMetadata.storeName,
           stateStoreMetadata.numPartitions,
           if (batchIds.nonEmpty) batchIds.head else -1,
           if (batchIds.nonEmpty) batchIds.last else -1,
+          operatorProperties,
           stateStoreMetadata.numColsPrefixKey
         )
       }

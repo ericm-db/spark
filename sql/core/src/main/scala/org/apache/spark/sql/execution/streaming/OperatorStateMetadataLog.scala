@@ -21,14 +21,29 @@ import java.io.{BufferedReader, InputStream, InputStreamReader, OutputStream}
 import java.nio.charset.StandardCharsets
 import java.nio.charset.StandardCharsets._
 
+import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.FSDataOutputStream
 
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.execution.streaming.state.{OperatorStateMetadata, OperatorStateMetadataV1, OperatorStateMetadataV2}
+import org.apache.spark.sql.internal.SQLConf
 
 
-class OperatorStateMetadataLog(sparkSession: SparkSession, path: String)
-  extends HDFSMetadataLog[OperatorStateMetadata](sparkSession, path) {
+class OperatorStateMetadataLog(
+    hadoopConf: Configuration,
+    path: String,
+    metadataCacheEnabled: Boolean = false)
+  extends HDFSMetadataLog[OperatorStateMetadata](hadoopConf, path, metadataCacheEnabled) {
+
+  def this(sparkSession: SparkSession, path: String) = {
+    this(
+      sparkSession.sessionState.newHadoopConf(),
+      path,
+      metadataCacheEnabled = sparkSession.sessionState.conf.getConf(
+        SQLConf.STREAMING_METADATA_CACHE_ENABLED)
+    )
+  }
+
   override protected def serialize(metadata: OperatorStateMetadata, out: OutputStream): Unit = {
     val fsDataOutputStream = out.asInstanceOf[FSDataOutputStream]
     fsDataOutputStream.write(s"v${metadata.version}\n".getBytes(StandardCharsets.UTF_8))
