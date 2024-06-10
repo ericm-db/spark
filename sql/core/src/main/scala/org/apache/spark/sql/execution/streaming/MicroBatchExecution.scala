@@ -663,6 +663,7 @@ class MicroBatchExecution(
             purgeAsync(execCtx.batchId)
           } else {
             purge(execCtx.batchId - minLogEntriesToMaintain)
+            purgeOldest()
           }
         }
       }

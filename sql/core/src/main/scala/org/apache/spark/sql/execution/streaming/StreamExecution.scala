@@ -694,7 +694,11 @@ abstract class StreamExecution(
     logDebug(s"Purging metadata at threshold=$threshold")
     offsetLog.purge(threshold)
     commitLog.purge(threshold)
-    operatorStateMetadataLogs.foreach(_._2.purge(threshold))
+  }
+
+  protected def purgeOldest(): Unit = {
+    operatorStateMetadataLogs.foreach(
+      _._2.purgeOldest(minLogEntriesToMaintain))
   }
 }
 

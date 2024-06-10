@@ -42,6 +42,8 @@ trait AsyncLogPurge extends Logging {
 
   protected def purge(threshold: Long): Unit
 
+  protected def purgeOldest(): Unit
+
   protected lazy val useAsyncPurge: Boolean = sparkSession.conf.get(SQLConf.ASYNC_LOG_PURGE)
 
   protected def purgeAsync(batchId: Long): Unit = {
@@ -49,6 +51,7 @@ trait AsyncLogPurge extends Logging {
       asyncPurgeExecutorService.execute(() => {
         try {
           purge(batchId - minLogEntriesToMaintain)
+          purgeOldest()
         } catch {
           case throwable: Throwable =>
             logError("Encountered error while performing async log purge", throwable)
