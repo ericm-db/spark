@@ -902,10 +902,13 @@ class MicroBatchExecution(
       if (!commitLog.add(execCtx.batchId, CommitMetadata(watermarkTracker.currentWatermark))) {
         throw QueryExecutionErrors.concurrentStreamLogUpdate(execCtx.batchId)
       }
-      val shouldWriteMetadatas = execCtx.previousContext.isEmpty ||
-        execCtx.previousContext.get.executionPlan.runId != execCtx.executionPlan.runId
+      val shouldWriteMetadatas = execCtx.previousContext match {
+        case Some(prevCtx)
+          if prevCtx.executionPlan.runId == execCtx.executionPlan.runId =>
+            false
+        case _ => true
+      }
       if (shouldWriteMetadatas) {
-        logError("writing out metadatas")
         execCtx.executionPlan.executedPlan.collect {
           case s: StateStoreWriter =>
             val metadata = s.operatorStateMetadata()
