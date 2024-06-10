@@ -902,14 +902,19 @@ class MicroBatchExecution(
       if (!commitLog.add(execCtx.batchId, CommitMetadata(watermarkTracker.currentWatermark))) {
         throw QueryExecutionErrors.concurrentStreamLogUpdate(execCtx.batchId)
       }
-      execCtx.executionPlan.executedPlan.collect {
-        case s: StateStoreWriter =>
-          val metadata = s.operatorStateMetadata()
-          val id = metadata.operatorInfo.operatorId
-          val metadataFile = operatorStateMetadataLogs(id)
-          if (!metadataFile.add(execCtx.batchId, metadata)) {
-            throw QueryExecutionErrors.concurrentStreamLogUpdate(execCtx.batchId)
-          }
+      val shouldWriteMetadatas = execCtx.previousContext.isEmpty ||
+        execCtx.previousContext.get.executionPlan.runId != execCtx.executionPlan.runId
+      if (shouldWriteMetadatas) {
+        logError("writing out metadatas")
+        execCtx.executionPlan.executedPlan.collect {
+          case s: StateStoreWriter =>
+            val metadata = s.operatorStateMetadata()
+            val id = metadata.operatorInfo.operatorId
+            val metadataFile = operatorStateMetadataLogs(id)
+            if (!metadataFile.add(execCtx.batchId, metadata)) {
+              throw QueryExecutionErrors.concurrentStreamLogUpdate(execCtx.batchId)
+            }
+        }
       }
     }
     committedOffsets ++= execCtx.endOffsets
