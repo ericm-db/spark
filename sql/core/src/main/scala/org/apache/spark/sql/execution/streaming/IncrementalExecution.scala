@@ -188,16 +188,12 @@ class IncrementalExecution(
   }
 
   object PopulateSchemaV3Rule extends SparkPlanPartialRule with Logging {
-    logError(s"### PopulateSchemaV3Rule, batchId = $currentBatchId")
     override val rule: PartialFunction[SparkPlan, SparkPlan] = {
-      case tws: TransformWithStateExec =>
+      case tws: TransformWithStateExec if isFirstBatch && currentBatchId != 0 =>
         val stateSchemaV3File = new StateSchemaV3File(
           hadoopConf, tws.stateSchemaFilePath().toString)
-        logError(s"### trying to get schema from file: ${tws.stateSchemaFilePath()}")
         stateSchemaV3File.getLatest() match {
           case Some((_, schemaJValue)) =>
-            logError("### PASSING SCHEMA TO OPERATOR")
-            logError(s"### schemaJValue: $schemaJValue")
             tws.copy(columnFamilyJValue = Some(schemaJValue))
           case None => tws
         }
@@ -471,7 +467,6 @@ class IncrementalExecution(
     }
 
     override def apply(plan: SparkPlan): SparkPlan = {
-      logError(s"### applying rules to plan")
       val planWithStateOpId = plan transform composedRule
       val planWithSchema = planWithStateOpId transform PopulateSchemaV3Rule.rule
       // Need to check before write to metadata because we need to detect add operator

@@ -115,12 +115,7 @@ case class TransformWithStateExec(
   }
 
   def columnFamilySchemas(): List[ColumnFamilySchema] = {
-    val columnFamilySchemas = ColumnFamilySchemaV1.fromJValue(columnFamilyJValue)
-    columnFamilySchemas.foreach {
-      case c1: ColumnFamilySchemaV1 => logError(s"### colFamilyName:" +
-        s"${c1.columnFamilyName}")
-    }
-    columnFamilySchemas
+    ColumnFamilySchemaV1.fromJValue(columnFamilyJValue)
   }
 
   override def shouldRunAnotherBatch(newInputWatermark: Long): Boolean = {

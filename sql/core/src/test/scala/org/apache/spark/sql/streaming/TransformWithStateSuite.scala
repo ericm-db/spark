@@ -919,14 +919,16 @@ class TransformWithStateSuite extends StateStoreMetricsTest
             OutputMode.Append())
 
         // verify that query with ttl enabled after restart fails
-        testStream(result, OutputMode.Append())(
+        testStream(result2, OutputMode.Append())(
           StartStream(
             Trigger.ProcessingTime("1 second"),
             triggerClock = clock,
             checkpointLocation = chkptDir.getCanonicalPath
           ),
           AddData(inputData, "a"),
-          AdvanceManualClock(1 * 1000)
+          AdvanceManualClock(1 * 1000),
+          CheckNewAnswer(("a", "1")),
+          StopStream
         )
       }
     }
