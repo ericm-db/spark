@@ -48,7 +48,7 @@ object ImplicitGroupingKeyTracker {
  */
 object StatefulProcessorHandleState extends Enumeration {
   type StatefulProcessorHandleState = Value
-  val CREATED, INITIALIZED, DATA_PROCESSED, TIMER_PROCESSED, CLOSED = Value
+  val CREATED, PRE_INIT, INITIALIZED, DATA_PROCESSED, TIMER_PROCESSED, CLOSED = Value
 }
 
 class QueryInfoImpl(
@@ -70,7 +70,8 @@ class QueryInfoImpl(
 /**
  * Class that provides a concrete implementation of a StatefulProcessorHandle. Note that we keep
  * track of valid transitions as various functions are invoked to track object lifecycle.
- * @param store - instance of state store
+ * @param store - instance of state store - if this processorHandle is being created
+ *              on the driver, the Store will be None.
  * @param runId - unique id for the current run
  * @param keyEncoder - encoder for the key
  * @param isStreaming - defines whether the query is streaming or batch
@@ -78,7 +79,7 @@ class QueryInfoImpl(
  * @param metrics - metrics to be updated as part of stateful processing
  */
 class StatefulProcessorHandleImpl(
-    store: StateStore,
+    store: Option[StateStore],
     runId: UUID,
     keyEncoder: ExpressionEncoder[Any],
     timeMode: TimeMode,
@@ -131,34 +132,42 @@ class StatefulProcessorHandleImpl(
   override def getValueState[T](
       stateName: String,
       valEncoder: Encoder[T]): ValueState[T] = {
-    verifyStateVarOperations("get_value_state")
-    incrementMetric("numValueStateVars")
-    val resultState = new ValueStateImpl[T](store, stateName, keyEncoder, valEncoder)
-    stateVariables.add(new StateVariableInfo(stateName, ValueState, false))
-    resultState
+    store match {
+      case Some(store) =>
+        verifyStateVarOperations("get_value_state")
+        incrementMetric("numValueStateVars")
+        new ValueStateImpl[T](store, stateName, keyEncoder, valEncoder)
+      case None =>
+        stateVariables.add(new StateVariableInfo(stateName, ValueState, false))
+        null
+    }
   }
 
   override def getValueState[T](
       stateName: String,
       valEncoder: Encoder[T],
       ttlConfig: TTLConfig): ValueState[T] = {
-    verifyStateVarOperations("get_value_state")
-    validateTTLConfig(ttlConfig, stateName)
-
-    assert(batchTimestampMs.isDefined)
-    val valueStateWithTTL = new ValueStateImplWithTTL[T](store, stateName,
-      keyEncoder, valEncoder, ttlConfig, batchTimestampMs.get)
-    incrementMetric("numValueStateWithTTLVars")
-    ttlStates.add(valueStateWithTTL)
-    stateVariables.add(new StateVariableInfo(stateName, ValueState, true))
-    valueStateWithTTL
+    store match {
+      case Some(store) => verifyStateVarOperations("get_value_state")
+        validateTTLConfig(ttlConfig, stateName)
+        assert(batchTimestampMs.isDefined)
+        val valueStateWithTTL = new ValueStateImplWithTTL[T](store, stateName,
+          keyEncoder, valEncoder, ttlConfig, batchTimestampMs.get)
+        incrementMetric("numValueStateWithTTLVars")
+        ttlStates.add(valueStateWithTTL)
+        valueStateWithTTL
+      case None =>
+        stateVariables.add(new StateVariableInfo(stateName, ValueState, true))
+        null
+    }
   }
 
   override def getQueryInfo(): QueryInfo = currQueryInfo
 
-  private lazy val timerState = new TimerStateImpl(store, timeMode, keyEncoder)
+  private lazy val timerState = new TimerStateImpl(store.get, timeMode, keyEncoder)
 
   private def verifyStateVarOperations(operationType: String): Unit = {
+    assert(store.isDefined, "Cannot call this method on a handle without a state store")
     if (currState != CREATED) {
       throw StateStoreErrors.cannotPerformOperationWithInvalidHandleState(operationType,
         currState.toString)
@@ -166,6 +175,7 @@ class StatefulProcessorHandleImpl(
   }
 
   private def verifyTimerOperations(operationType: String): Unit = {
+    assert(store.isDefined, "Cannot call this method on a handle without a state store")
     if (timeMode == NoTime) {
       throw StateStoreErrors.cannotPerformOperationWithInvalidTimeMode(operationType,
         timeMode.toString)
@@ -238,17 +248,21 @@ class StatefulProcessorHandleImpl(
    */
   override def deleteIfExists(stateName: String): Unit = {
     verifyStateVarOperations("delete_if_exists")
-    if (store.removeColFamilyIfExists(stateName)) {
+    if (store.get.removeColFamilyIfExists(stateName)) {
       incrementMetric("numDeletedStateVars")
     }
   }
 
   override def getListState[T](stateName: String, valEncoder: Encoder[T]): ListState[T] = {
-    verifyStateVarOperations("get_list_state")
-    incrementMetric("numListStateVars")
-    val resultState = new ListStateImpl[T](store, stateName, keyEncoder, valEncoder)
-    stateVariables.add(new StateVariableInfo(stateName, ListState, false))
-    resultState
+    store match {
+      case Some(store) =>
+        verifyStateVarOperations("get_list_state")
+        incrementMetric("numListStateVars")
+        new ListStateImpl[T](store, stateName, keyEncoder, valEncoder)
+      case None =>
+        stateVariables.add(new StateVariableInfo(stateName, ListState, false))
+        null
+    }
   }
 
   /**
@@ -271,27 +285,34 @@ class StatefulProcessorHandleImpl(
       valEncoder: Encoder[T],
       ttlConfig: TTLConfig): ListState[T] = {
 
-    verifyStateVarOperations("get_list_state")
-    validateTTLConfig(ttlConfig, stateName)
-
-    assert(batchTimestampMs.isDefined)
-    val listStateWithTTL = new ListStateImplWithTTL[T](store, stateName,
-      keyEncoder, valEncoder, ttlConfig, batchTimestampMs.get)
-    incrementMetric("numListStateWithTTLVars")
-    ttlStates.add(listStateWithTTL)
-    stateVariables.add(new StateVariableInfo(stateName, ListState, true))
-    listStateWithTTL
+    store match {
+      case Some(store) => verifyStateVarOperations("get_list_state")
+        validateTTLConfig(ttlConfig, stateName)
+        assert(batchTimestampMs.isDefined)
+        val listStateWithTTL = new ListStateImplWithTTL[T](store, stateName,
+          keyEncoder, valEncoder, ttlConfig, batchTimestampMs.get)
+        incrementMetric("numListStateWithTTLVars")
+        ttlStates.add(listStateWithTTL)
+        listStateWithTTL
+      case None =>
+        stateVariables.add(new StateVariableInfo(stateName, ListState, true))
+        null
+    }
   }
 
   override def getMapState[K, V](
       stateName: String,
       userKeyEnc: Encoder[K],
       valEncoder: Encoder[V]): MapState[K, V] = {
-    verifyStateVarOperations("get_map_state")
-    incrementMetric("numMapStateVars")
-    val resultState = new MapStateImpl[K, V](store, stateName, keyEncoder, userKeyEnc, valEncoder)
-    stateVariables.add(new StateVariableInfo(stateName, MapState, false))
-    resultState
+    store match {
+      case Some(store) =>
+        verifyStateVarOperations("get_map_state")
+        incrementMetric("numMapStateVars")
+        new MapStateImpl[K, V](store, stateName, keyEncoder, userKeyEnc, valEncoder)
+      case None =>
+        stateVariables.add(new StateVariableInfo(stateName, ValueState, false))
+        null
+    }
   }
 
   override def getMapState[K, V](
@@ -299,16 +320,19 @@ class StatefulProcessorHandleImpl(
       userKeyEnc: Encoder[K],
       valEncoder: Encoder[V],
       ttlConfig: TTLConfig): MapState[K, V] = {
-    verifyStateVarOperations("get_map_state")
-    validateTTLConfig(ttlConfig, stateName)
-
-    assert(batchTimestampMs.isDefined)
-    val mapStateWithTTL = new MapStateImplWithTTL[K, V](store, stateName, keyEncoder, userKeyEnc,
-      valEncoder, ttlConfig, batchTimestampMs.get)
-    incrementMetric("numMapStateWithTTLVars")
-    ttlStates.add(mapStateWithTTL)
-    stateVariables.add(new StateVariableInfo(stateName, MapState, true))
-    mapStateWithTTL
+    store match {
+      case Some(store) => verifyStateVarOperations("get_map_state")
+        validateTTLConfig(ttlConfig, stateName)
+        assert(batchTimestampMs.isDefined)
+        val mapStateWithTTL = new MapStateImplWithTTL[K, V](store, stateName,
+          keyEncoder, userKeyEnc, valEncoder, ttlConfig, batchTimestampMs.get)
+        incrementMetric("numMapStateWithTTLVars")
+        ttlStates.add(mapStateWithTTL)
+        mapStateWithTTL
+      case None =>
+        stateVariables.add(new StateVariableInfo(stateName, MapState, true))
+        null
+    }
   }
 
   private def validateTTLConfig(ttlConfig: TTLConfig, stateName: String): Unit = {

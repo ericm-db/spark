@@ -48,7 +48,7 @@ class ValueStateSuite extends StateVariableSuiteBase {
   test("Implicit key operations") {
     tryWithProviderResource(newStoreProviderWithStateVariable(true)) { provider =>
       val store = provider.getStore(0)
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val handle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]], TimeMode.None())
 
       val stateName = "testState"
@@ -92,7 +92,7 @@ class ValueStateSuite extends StateVariableSuiteBase {
   test("Value state operations for single instance") {
     tryWithProviderResource(newStoreProviderWithStateVariable(true)) { provider =>
       val store = provider.getStore(0)
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val handle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]], TimeMode.None())
 
       val testState: ValueState[Long] = handle.getValueState[Long]("testState", Encoders.scalaLong)
@@ -118,7 +118,7 @@ class ValueStateSuite extends StateVariableSuiteBase {
   test("Value state operations for multiple instances") {
     tryWithProviderResource(newStoreProviderWithStateVariable(true)) { provider =>
       val store = provider.getStore(0)
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val handle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]], TimeMode.None())
 
       val testState1: ValueState[Long] = handle.getValueState[Long](
@@ -163,7 +163,7 @@ class ValueStateSuite extends StateVariableSuiteBase {
   test("Value state operations for unsupported type name should fail") {
     tryWithProviderResource(newStoreProviderWithStateVariable(true)) { provider =>
       val store = provider.getStore(0)
-      val handle = new StatefulProcessorHandleImpl(store,
+      val handle = new StatefulProcessorHandleImpl(Some(store),
         UUID.randomUUID(), Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]], TimeMode.None())
 
       val cfName = "_testState"
@@ -203,7 +203,7 @@ class ValueStateSuite extends StateVariableSuiteBase {
   test("test SQL encoder - Value state operations for Primitive(Double) instances") {
     tryWithProviderResource(newStoreProviderWithStateVariable(true)) { provider =>
       val store = provider.getStore(0)
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val handle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]], TimeMode.None())
 
       val testState: ValueState[Double] = handle.getValueState[Double]("testState",
@@ -229,7 +229,7 @@ class ValueStateSuite extends StateVariableSuiteBase {
   test("test SQL encoder - Value state operations for Primitive(Long) instances") {
     tryWithProviderResource(newStoreProviderWithStateVariable(true)) { provider =>
       val store = provider.getStore(0)
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val handle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]], TimeMode.None())
 
       val testState: ValueState[Long] = handle.getValueState[Long]("testState",
@@ -255,7 +255,7 @@ class ValueStateSuite extends StateVariableSuiteBase {
   test("test SQL encoder - Value state operations for case class instances") {
     tryWithProviderResource(newStoreProviderWithStateVariable(true)) { provider =>
       val store = provider.getStore(0)
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val handle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]], TimeMode.None())
 
       val testState: ValueState[TestClass] = handle.getValueState[TestClass]("testState",
@@ -281,7 +281,7 @@ class ValueStateSuite extends StateVariableSuiteBase {
   test("test SQL encoder - Value state operations for POJO instances") {
     tryWithProviderResource(newStoreProviderWithStateVariable(true)) { provider =>
       val store = provider.getStore(0)
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val handle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]], TimeMode.None())
 
       val testState: ValueState[POJOTestClass] = handle.getValueState[POJOTestClass]("testState",
@@ -309,7 +309,7 @@ class ValueStateSuite extends StateVariableSuiteBase {
     tryWithProviderResource(newStoreProviderWithStateVariable(true)) { provider =>
       val store = provider.getStore(0)
       val timestampMs = 10
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val handle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]], TimeMode.ProcessingTime(),
         batchTimestampMs = Some(timestampMs))
 
@@ -329,7 +329,7 @@ class ValueStateSuite extends StateVariableSuiteBase {
       assert(ttlStateValueIterator.hasNext)
 
       // increment batchProcessingTime, or watermark and ensure expired value is not returned
-      val nextBatchHandle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val nextBatchHandle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]],
         TimeMode.ProcessingTime(), batchTimestampMs = Some(ttlExpirationMs))
 
@@ -365,7 +365,7 @@ class ValueStateSuite extends StateVariableSuiteBase {
     tryWithProviderResource(newStoreProviderWithStateVariable(true)) { provider =>
       val store = provider.getStore(0)
       val batchTimestampMs = 10
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val handle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]],
         TimeMode.ProcessingTime(), batchTimestampMs = Some(batchTimestampMs))
 

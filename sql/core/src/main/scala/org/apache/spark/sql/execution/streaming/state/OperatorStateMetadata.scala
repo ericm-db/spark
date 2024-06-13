@@ -74,47 +74,6 @@ case class OperatorStateMetadataV1(
   override def version: Int = 1
 }
 
-/**
- * Accumulator to store arbitrary Operator properties.
- * This accumulator is used to store the properties of an operator that are not
- * available on the driver at the time of planning, and will only be known from
- * the executor side.
- */
-class OperatorProperties(initValue: Map[String, JValue] = Map.empty)
-  extends AccumulatorV2[Map[String, JValue], Map[String, JValue]] {
-
-  private var _value: Map[String, JValue] = initValue
-
-  override def isZero: Boolean = _value.isEmpty
-
-  override def copy(): AccumulatorV2[Map[String, JValue], Map[String, JValue]] = {
-    val newAcc = new OperatorProperties
-    newAcc._value = _value
-    newAcc
-  }
-
-  override def reset(): Unit = _value = Map.empty[String, JValue]
-
-  override def add(v: Map[String, JValue]): Unit = _value ++= v
-
-  override def merge(other: AccumulatorV2[Map[String, JValue], Map[String, JValue]]): Unit = {
-    _value ++= other.value
-  }
-
-  override def value: Map[String, JValue] = _value
-}
-
-object OperatorProperties {
-  def create(
-      sc: SparkContext,
-      name: String,
-      initValue: Map[String, JValue] = Map.empty): OperatorProperties = {
-    val acc = new OperatorProperties(initValue)
-    acc.register(sc, name = Some(name))
-    acc
-  }
-}
-
 // operatorProperties is an arbitrary JSON formatted string that contains
 // any properties that we would want to store for a particular operator.
 case class OperatorStateMetadataV2(

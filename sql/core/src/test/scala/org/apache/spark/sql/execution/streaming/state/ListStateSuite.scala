@@ -37,7 +37,7 @@ class ListStateSuite extends StateVariableSuiteBase {
   private def testMapStateWithNullUserKey()(runListOps: ListState[Long] => Unit): Unit = {
     tryWithProviderResource(newStoreProviderWithStateVariable(true)) { provider =>
       val store = provider.getStore(0)
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val handle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]], TimeMode.None())
 
       val listState: ListState[Long] = handle.getListState[Long]("listState", Encoders.scalaLong)
@@ -70,7 +70,7 @@ class ListStateSuite extends StateVariableSuiteBase {
   test("List state operations for single instance") {
     tryWithProviderResource(newStoreProviderWithStateVariable(true)) { provider =>
       val store = provider.getStore(0)
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val handle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]], TimeMode.None())
 
       val testState: ListState[Long] = handle.getListState[Long]("testState", Encoders.scalaLong)
@@ -98,7 +98,7 @@ class ListStateSuite extends StateVariableSuiteBase {
   test("List state operations for multiple instance") {
     tryWithProviderResource(newStoreProviderWithStateVariable(true)) { provider =>
       val store = provider.getStore(0)
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val handle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]], TimeMode.None())
 
       val testState1: ListState[Long] = handle.getListState[Long]("testState1", Encoders.scalaLong)
@@ -136,7 +136,7 @@ class ListStateSuite extends StateVariableSuiteBase {
   test("List state operations with list, value, another list instances") {
     tryWithProviderResource(newStoreProviderWithStateVariable(true)) { provider =>
       val store = provider.getStore(0)
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val handle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]], TimeMode.None())
 
       val listState1: ListState[Long] = handle.getListState[Long]("listState1", Encoders.scalaLong)
@@ -166,7 +166,7 @@ class ListStateSuite extends StateVariableSuiteBase {
     tryWithProviderResource(newStoreProviderWithStateVariable(true)) { provider =>
       val store = provider.getStore(0)
       val timestampMs = 10
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val handle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]],
         TimeMode.ProcessingTime(), batchTimestampMs = Some(timestampMs))
 
@@ -186,7 +186,7 @@ class ListStateSuite extends StateVariableSuiteBase {
       assert(ttlStateValueIterator.hasNext)
 
       // increment batchProcessingTime, or watermark and ensure expired value is not returned
-      val nextBatchHandle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val nextBatchHandle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]],
         TimeMode.ProcessingTime(), batchTimestampMs = Some(ttlExpirationMs))
 
@@ -222,7 +222,7 @@ class ListStateSuite extends StateVariableSuiteBase {
     tryWithProviderResource(newStoreProviderWithStateVariable(true)) { provider =>
       val store = provider.getStore(0)
       val batchTimestampMs = 10
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val handle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]],
         TimeMode.ProcessingTime(), batchTimestampMs = Some(batchTimestampMs))
 

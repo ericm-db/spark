@@ -40,7 +40,7 @@ class MapStateSuite extends StateVariableSuiteBase {
   test("Map state operations for single instance") {
     tryWithProviderResource(newStoreProviderWithStateVariable(true)) { provider =>
       val store = provider.getStore(0)
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val handle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]], TimeMode.None())
 
       val testState: MapState[String, Double] =
@@ -74,7 +74,7 @@ class MapStateSuite extends StateVariableSuiteBase {
   test("Map state operations for multiple map instances") {
     tryWithProviderResource(newStoreProviderWithStateVariable(true)) { provider =>
       val store = provider.getStore(0)
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val handle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]], TimeMode.None())
 
       val testState1: MapState[Long, Double] =
@@ -113,7 +113,7 @@ class MapStateSuite extends StateVariableSuiteBase {
   test("Map state operations with list, value, another map instances") {
     tryWithProviderResource(newStoreProviderWithStateVariable(true)) { provider =>
       val store = provider.getStore(0)
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val handle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]], TimeMode.None())
 
       val mapTestState1: MapState[String, Int] =
@@ -174,7 +174,7 @@ class MapStateSuite extends StateVariableSuiteBase {
     tryWithProviderResource(newStoreProviderWithStateVariable(true)) { provider =>
       val store = provider.getStore(0)
       val timestampMs = 10
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val handle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]], TimeMode.ProcessingTime(),
         batchTimestampMs = Some(timestampMs))
 
@@ -195,7 +195,7 @@ class MapStateSuite extends StateVariableSuiteBase {
       assert(ttlStateValueIterator.hasNext)
 
       // increment batchProcessingTime, or watermark and ensure expired value is not returned
-      val nextBatchHandle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val nextBatchHandle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]],
         TimeMode.ProcessingTime(), batchTimestampMs = Some(ttlExpirationMs))
 
@@ -232,7 +232,7 @@ class MapStateSuite extends StateVariableSuiteBase {
     tryWithProviderResource(newStoreProviderWithStateVariable(true)) { provider =>
       val store = provider.getStore(0)
       val batchTimestampMs = 10
-      val handle = new StatefulProcessorHandleImpl(store, UUID.randomUUID(),
+      val handle = new StatefulProcessorHandleImpl(Some(store), UUID.randomUUID(),
         Encoders.STRING.asInstanceOf[ExpressionEncoder[Any]],
         TimeMode.ProcessingTime(), batchTimestampMs = Some(batchTimestampMs))
 

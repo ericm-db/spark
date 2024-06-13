@@ -16,6 +16,7 @@
  */
 package org.apache.spark.sql.execution.streaming
 
+import java.util
 import java.util.UUID
 import java.util.concurrent.TimeUnit.NANOSECONDS
 
@@ -83,11 +84,8 @@ case class TransformWithStateExec(
     initialState: SparkPlan)
   extends BinaryExecNode with StateStoreWriter with WatermarkSupport with ObjectProducerExec {
 
-  val operatorProperties: OperatorProperties =
-    OperatorProperties.create(
-      sparkContext,
-      "colFamilyMetadata"
-    )
+  val operatorProperties: util.Map[String, JValue] =
+    new util.HashMap[String, JValue]()
 
   override def operatorStateMetadataVersion: Int = 2
 
@@ -103,7 +101,7 @@ case class TransformWithStateExec(
 
     val operatorPropertiesJson: JValue = ("timeMode" -> JString(timeMode.toString)) ~
       ("outputMode" -> JString(outputMode.toString)) ~
-      ("stateVariables" -> operatorProperties.value.get("stateVariables"))
+      ("stateVariables" -> operatorProperties.get("stateVariables"))
 
     val json = compact(render(operatorPropertiesJson))
     OperatorStateMetadataV2(operatorInfo, stateStoreInfo, json)
@@ -338,9 +336,6 @@ case class TransformWithStateExec(
           store.abort()
         }
       }
-      operatorProperties.add(Map
-      ("stateVariables" -> JArray(processorHandle.stateVariables.
-        asScala.map(_.jsonValue).toList)))
       setStoreMetrics(store)
       setOperatorMetrics()
       statefulProcessor.close()
@@ -377,6 +372,18 @@ case class TransformWithStateExec(
     metrics // force lazy init at driver
 
     validateTimeMode()
+
+    val driverProcessorHandle = new StatefulProcessorHandleImpl(
+      None, getStateInfo.queryRunId, keyEncoder, timeMode,
+      isStreaming, batchTimestampMs, metrics)
+
+    driverProcessorHandle.setHandleState(StatefulProcessorHandleState.PRE_INIT)
+    statefulProcessor.setHandle(driverProcessorHandle)
+    statefulProcessor.init(outputMode, timeMode)
+    operatorProperties.put("stateVariables", JArray(driverProcessorHandle.stateVariables.
+        asScala.map(_.jsonValue).toList))
+    statefulProcessor.setHandle(null)
+    driverProcessorHandle.setHandleState(StatefulProcessorHandleState.CLOSED)
 
     if (hasInitialState) {
       val storeConf = new StateStoreConf(session.sqlContext.sessionState.conf)
@@ -491,7 +498,7 @@ case class TransformWithStateExec(
   private def processData(store: StateStore, singleIterator: Iterator[InternalRow]):
     CompletionIterator[InternalRow, Iterator[InternalRow]] = {
     val processorHandle = new StatefulProcessorHandleImpl(
-      store, getStateInfo.queryRunId, keyEncoder, timeMode,
+      Some(store), getStateInfo.queryRunId, keyEncoder, timeMode,
       isStreaming, batchTimestampMs, metrics)
     assert(processorHandle.getHandleState == StatefulProcessorHandleState.CREATED)
     statefulProcessor.setHandle(processorHandle)
@@ -505,7 +512,7 @@ case class TransformWithStateExec(
       childDataIterator: Iterator[InternalRow],
       initStateIterator: Iterator[InternalRow]):
     CompletionIterator[InternalRow, Iterator[InternalRow]] = {
-    val processorHandle = new StatefulProcessorHandleImpl(store, getStateInfo.queryRunId,
+    val processorHandle = new StatefulProcessorHandleImpl(Some(store), getStateInfo.queryRunId,
       keyEncoder, timeMode, isStreaming, batchTimestampMs, metrics)
     assert(processorHandle.getHandleState == StatefulProcessorHandleState.CREATED)
     statefulProcessor.setHandle(processorHandle)
