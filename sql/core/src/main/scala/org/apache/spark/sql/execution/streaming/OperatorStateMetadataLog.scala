@@ -66,4 +66,32 @@ class OperatorStateMetadataLog(
       case "v2" => OperatorStateMetadataV2.deserialize(bufferedReader)
     }
   }
+
+
+  /**
+   * Store the metadata for the specified batchId and return `true` if successful. If the batchId's
+   * metadata has already been stored, this method will return `false`.
+   */
+  override def add(batchId: Long, metadata: OperatorStateMetadata): Boolean = {
+    require(metadata != null, "'null' metadata cannot written to a metadata log")
+    val batchMetadataFile = batchIdToPath(batchId)
+    if (fileManager.exists(batchMetadataFile)) {
+      fileManager.delete(batchMetadataFile)
+    }
+    val res = addNewBatchByStream(batchId) { output => serialize(metadata, output) }
+    if (metadataCacheEnabled && res) batchCache.put(batchId, metadata)
+    res
+  }
+
+  override def addNewBatchByStream(batchId: Long)(fn: OutputStream => Unit): Boolean = {
+    val batchMetadataFile = batchIdToPath(batchId)
+
+    if (metadataCacheEnabled && batchCache.containsKey(batchId)) {
+      false
+    } else {
+      write(batchMetadataFile, fn)
+      true
+    }
+  }
+
 }

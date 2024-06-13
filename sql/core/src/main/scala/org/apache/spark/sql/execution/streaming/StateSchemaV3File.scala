@@ -75,4 +75,26 @@ class StateSchemaV3File(
     val json = buf.toString()
    JsonMethods.parse(json)
   }
+
+  override def add(batchId: Long, metadata: JValue): Boolean = {
+    require(metadata != null, "'null' metadata cannot written to a metadata log")
+    val batchMetadataFile = batchIdToPath(batchId)
+    if (fileManager.exists(batchMetadataFile)) {
+      fileManager.delete(batchMetadataFile)
+    }
+    val res = addNewBatchByStream(batchId) { output => serialize(metadata, output) }
+    if (metadataCacheEnabled && res) batchCache.put(batchId, metadata)
+    res
+  }
+
+  override def addNewBatchByStream(batchId: Long)(fn: OutputStream => Unit): Boolean = {
+    val batchMetadataFile = batchIdToPath(batchId)
+
+    if (metadataCacheEnabled && batchCache.containsKey(batchId)) {
+      false
+    } else {
+      write(batchMetadataFile, fn)
+      true
+    }
+  }
 }
