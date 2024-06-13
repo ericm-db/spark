@@ -28,6 +28,10 @@ import scala.util.control.NonFatal
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
+import org.json4s.{JInt, JsonAST, JString}
+import org.json4s.JsonAST.JObject
+import org.json4s.JsonDSL._
+import org.json4s.jackson.JsonMethods.{compact, render}
 
 import org.apache.spark.{SparkContext, SparkEnv, SparkUnsupportedOperationException}
 import org.apache.spark.internal.{Logging, LogKeys, MDC}
@@ -132,6 +136,10 @@ trait StateStore extends ReadStateStore {
       keyStateEncoderSpec: KeyStateEncoderSpec,
       useMultipleValuesPerKey: Boolean = false,
       isInternal: Boolean = false): Unit
+
+  def createColFamilyIfAbsent(
+     colFamilyMetadata: ColumnFamilySchemaV1
+    ): Unit
 
   /**
    * Put a new non-null value for a non-null key. Implementations must be aware that the UnsafeRows
@@ -289,15 +297,47 @@ class InvalidUnsafeRowException(error: String)
     "among restart. For the first case, you can try to restart the application without " +
     s"checkpoint or use the legacy Spark version to process the streaming state.\n$error", null)
 
-sealed trait KeyStateEncoderSpec
+sealed trait KeyStateEncoderSpec {
+  def jsonValue: JsonAST.JObject
+  def json: String = compact(render(jsonValue))
+}
 
-case class NoPrefixKeyStateEncoderSpec(keySchema: StructType) extends KeyStateEncoderSpec
+object KeyStateEncoderSpec {
+  def fromJson(m: Map[String, Any]): KeyStateEncoderSpec = {
+    // match on type
+    val keySchema = StructType.fromString(m("keySchema").asInstanceOf[String])
+    m("keyStateEncoderType").asInstanceOf[String] match {
+      case "NoPrefixKeyStateEncoderSpec" =>
+        NoPrefixKeyStateEncoderSpec(keySchema)
+      case "RangeKeyScanStateEncoderSpec" =>
+        val orderingOrdinals = m("orderingOrdinals").
+          asInstanceOf[List[_]].map(_.asInstanceOf[Int])
+        RangeKeyScanStateEncoderSpec(keySchema, orderingOrdinals)
+      case "PrefixKeyScanStateEncoderSpec" =>
+        val numColsPrefixKey = m("numColsPrefixKey").asInstanceOf[Int]
+        PrefixKeyScanStateEncoderSpec(keySchema, numColsPrefixKey)
+    }
+  }
+}
+
+case class NoPrefixKeyStateEncoderSpec(keySchema: StructType) extends KeyStateEncoderSpec {
+  override def jsonValue: JsonAST.JObject = {
+    ("keyStateEncoderType" -> JString("NoPrefixKeyStateEncoderSpec")) ~
+      ("keySchema" -> JString(keySchema.json))
+  }
+}
 
 case class PrefixKeyScanStateEncoderSpec(
     keySchema: StructType,
     numColsPrefixKey: Int) extends KeyStateEncoderSpec {
   if (numColsPrefixKey == 0 || numColsPrefixKey >= keySchema.length) {
     throw StateStoreErrors.incorrectNumOrderingColsForPrefixScan(numColsPrefixKey.toString)
+  }
+
+  override def jsonValue: JsonAST.JObject = {
+    ("keyStateEncoderType" -> JString("PrefixKeyScanStateEncoderSpec")) ~
+      ("keySchema" -> JString(keySchema.json)) ~
+      ("numColsPrefixKey" -> JInt(numColsPrefixKey))
   }
 }
 
@@ -307,6 +347,12 @@ case class RangeKeyScanStateEncoderSpec(
     orderingOrdinals: Seq[Int]) extends KeyStateEncoderSpec {
   if (orderingOrdinals.isEmpty || orderingOrdinals.length > keySchema.length) {
     throw StateStoreErrors.incorrectNumOrderingColsForRangeScan(orderingOrdinals.length.toString)
+  }
+
+  override def jsonValue: JObject = {
+    ("keyStateEncoderType" -> JString("RangeKeyScanStateEncoderSpec")) ~
+      ("keySchema" -> JString(keySchema.json)) ~
+      ("orderingOrdinals" -> orderingOrdinals.map(JInt(_)))
   }
 }
 

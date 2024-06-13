@@ -81,7 +81,8 @@ case class TransformWithStateExec(
     initialStateGroupingAttrs: Seq[Attribute],
     initialStateDataAttrs: Seq[Attribute],
     initialStateDeserializer: Expression,
-    initialState: SparkPlan)
+    initialState: SparkPlan,
+    columnFamilyJValue: Option[JValue] = None)
   extends BinaryExecNode with StateStoreWriter with WatermarkSupport with ObjectProducerExec {
 
   val operatorProperties: util.Map[String, JValue] =
@@ -91,6 +92,7 @@ case class TransformWithStateExec(
 
   override def shortName: String = "transformWithStateExec"
 
+  columnFamilySchemas()
 
   /** Metadata of this stateful operator and its states stores. */
   override def operatorStateMetadata(): OperatorStateMetadata = {
@@ -105,6 +107,20 @@ case class TransformWithStateExec(
 
     val json = compact(render(operatorPropertiesJson))
     OperatorStateMetadataV2(operatorInfo, stateStoreInfo, json)
+  }
+
+  def getColumnFamilyJValue(): JValue = {
+    val columnFamilySchemas = operatorProperties.get("columnFamilySchemas")
+    columnFamilySchemas
+  }
+
+  def columnFamilySchemas(): List[ColumnFamilySchema] = {
+    val columnFamilySchemas = ColumnFamilySchemaV1.fromJValue(columnFamilyJValue)
+    columnFamilySchemas.foreach {
+      case c1: ColumnFamilySchemaV1 => logError(s"### colFamilyName:" +
+        s"${c1.columnFamilyName}")
+    }
+    columnFamilySchemas
   }
 
   override def shouldRunAnotherBatch(newInputWatermark: Long): Boolean = {
@@ -382,6 +398,9 @@ case class TransformWithStateExec(
     statefulProcessor.init(outputMode, timeMode)
     operatorProperties.put("stateVariables", JArray(driverProcessorHandle.stateVariables.
         asScala.map(_.jsonValue).toList))
+    operatorProperties.put("columnFamilySchemas", JArray(driverProcessorHandle.
+      columnFamilySchemas.asScala.map(_.jsonValue).toList))
+
     statefulProcessor.setHandle(null)
     driverProcessorHandle.setHandleState(StatefulProcessorHandleState.CLOSED)
 

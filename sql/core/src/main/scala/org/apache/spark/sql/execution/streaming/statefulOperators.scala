@@ -78,6 +78,21 @@ trait StatefulOperator extends SparkPlan {
       new Path(getStateInfo.checkpointLocation, getStateInfo.operatorId.toString)
     new Path(new Path(stateCheckpointPath, "_metadata"), "metadata")
   }
+
+  // <checkpoint-loc>/state/<operator-id>/0/<storeName>/_metadata/schema
+  def stateSchemaFilePath(storeName: Option[String] = None): Path = {
+    def stateInfo = getStateInfo
+    val stateCheckpointPath =
+      new Path(getStateInfo.checkpointLocation,
+        s"${stateInfo.operatorId.toString}")
+    storeName match {
+      case Some(storeName) =>
+        val storeNamePath = new Path(stateCheckpointPath, storeName)
+        new Path(new Path(storeNamePath, "_metadata"), "schema")
+      case None =>
+        new Path(new Path(stateCheckpointPath, "_metadata"), "schema")
+    }
+  }
 }
 
 /**

@@ -40,6 +40,10 @@ class MemoryStateStore extends StateStore() {
     throw StateStoreErrors.multipleColumnFamiliesNotSupported("MemoryStateStoreProvider")
   }
 
+  override def createColFamilyIfAbsent(colFamilyMetadata: ColumnFamilySchemaV1): Unit = {
+    throw StateStoreErrors.removingColumnFamiliesNotSupported("MemoryStateStoreProvider")
+  }
+
   override def removeColFamilyIfExists(colFamilyName: String): Boolean = {
     throw StateStoreErrors.removingColumnFamiliesNotSupported("MemoryStateStoreProvider")
   }

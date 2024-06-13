@@ -187,6 +187,23 @@ class IncrementalExecution(
     }
   }
 
+  object PopulateSchemaV3Rule extends SparkPlanPartialRule with Logging {
+    logError(s"### PopulateSchemaV3Rule, batchId = $currentBatchId")
+    override val rule: PartialFunction[SparkPlan, SparkPlan] = {
+      case tws: TransformWithStateExec =>
+        val stateSchemaV3File = new StateSchemaV3File(
+          hadoopConf, tws.stateSchemaFilePath().toString)
+        logError(s"### trying to get schema from file: ${tws.stateSchemaFilePath()}")
+        stateSchemaV3File.getLatest() match {
+          case Some((_, schemaJValue)) =>
+            logError("### PASSING SCHEMA TO OPERATOR")
+            logError(s"### schemaJValue: $schemaJValue")
+            tws.copy(columnFamilyJValue = Some(schemaJValue))
+          case None => tws
+        }
+    }
+  }
+
   object StateOpIdRule extends SparkPlanPartialRule {
     override val rule: PartialFunction[SparkPlan, SparkPlan] = {
       case StateStoreSaveExec(keys, None, None, None, None, stateFormatVersion,
@@ -454,16 +471,18 @@ class IncrementalExecution(
     }
 
     override def apply(plan: SparkPlan): SparkPlan = {
+      logError(s"### applying rules to plan")
       val planWithStateOpId = plan transform composedRule
+      val planWithSchema = planWithStateOpId transform PopulateSchemaV3Rule.rule
       // Need to check before write to metadata because we need to detect add operator
       // Only check when streaming is restarting and is first batch
       if (isFirstBatch && currentBatchId != 0) {
-        checkOperatorValidWithMetadata(planWithStateOpId)
+        checkOperatorValidWithMetadata(planWithSchema)
       }
       // The rule doesn't change the plan but cause the side effect that metadata is written
       // in the checkpoint directory of stateful operator.
-      simulateWatermarkPropagation(planWithStateOpId)
-      planWithStateOpId transform WatermarkPropagationRule.rule
+      simulateWatermarkPropagation(planWithSchema)
+      planWithSchema transform WatermarkPropagationRule.rule
     }
   }
 

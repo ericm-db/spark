@@ -906,10 +906,22 @@ class MicroBatchExecution(
       val shouldWriteMetadatas = execCtx.previousContext match {
         case Some(prevCtx)
           if prevCtx.executionPlan.runId == execCtx.executionPlan.runId =>
-            false
+          false
         case _ => true
       }
+
       if (shouldWriteMetadatas) {
+        execCtx.executionPlan.executedPlan.collect {
+          case tws: TransformWithStateExec =>
+            val schema = tws.getColumnFamilyJValue()
+            val metadata = tws.operatorStateMetadata()
+            val id = metadata.operatorInfo.operatorId
+            val schemaFile = stateSchemaLogs(id)
+            logError(s"Writing schema for operator $id at path ${schemaFile.metadataPath}")
+            if (!schemaFile.add(execCtx.batchId, schema)) {
+              throw QueryExecutionErrors.concurrentStreamLogUpdate(execCtx.batchId)
+            }
+        }
         execCtx.executionPlan.executedPlan.collect {
           case s: StateStoreWriter =>
             val metadata = s.operatorStateMetadata()

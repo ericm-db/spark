@@ -244,6 +244,10 @@ abstract class StreamExecution(
     populateOperatorStateMetadatas(getLatestExecutionContext().executionPlan.executedPlan)
   }
 
+  lazy val stateSchemaLogs: Map[Long, StateSchemaV3File] = {
+    populateStateSchemaFiles(getLatestExecutionContext().executionPlan.executedPlan)
+  }
+
   private def populateOperatorStateMetadatas(
       plan: SparkPlan): Map[Long, OperatorStateMetadataLog] = {
     plan.flatMap {
@@ -251,6 +255,18 @@ abstract class StreamExecution(
         val metadataPath = s.metadataFilePath()
         info.operatorId -> new OperatorStateMetadataLog(sparkSession,
           metadataPath.toString)
+      }
+      case _ => Seq.empty
+    }.toMap
+  }
+
+  private def populateStateSchemaFiles(
+      plan: SparkPlan): Map[Long, StateSchemaV3File] = {
+    plan.flatMap {
+      case s: StateStoreWriter => s.stateInfo.map { info =>
+        val schemaFilePath = s.stateSchemaFilePath()
+        info.operatorId -> new StateSchemaV3File(sparkSession,
+          schemaFilePath.toString)
       }
       case _ => Seq.empty
     }.toMap

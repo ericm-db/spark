@@ -98,6 +98,9 @@ class StatefulProcessorHandleImpl(
   private[sql] val stateVariables: util.List[StateVariableInfo] =
     new util.ArrayList[StateVariableInfo]()
 
+  private[sql] val columnFamilySchemas: util.List[ColumnFamilySchema] =
+    new util.ArrayList[ColumnFamilySchema]()
+
   private val BATCH_QUERY_ID = "00000000-0000-0000-0000-000000000000"
 
   private def buildQueryInfo(): QueryInfo = {
@@ -139,6 +142,8 @@ class StatefulProcessorHandleImpl(
         new ValueStateImpl[T](store, stateName, keyEncoder, valEncoder)
       case None =>
         stateVariables.add(new StateVariableInfo(stateName, ValueState, false))
+        val colFamilySchema = resultState.columnFamilySchema
+        columnFamilySchemas.add(colFamilySchema)
         null
     }
   }
@@ -158,6 +163,8 @@ class StatefulProcessorHandleImpl(
         valueStateWithTTL
       case None =>
         stateVariables.add(new StateVariableInfo(stateName, ValueState, true))
+        val colFamilySchema = resultState.columnFamilySchema
+        columnFamilySchemas.add(colFamilySchema)
         null
     }
   }
@@ -296,6 +303,8 @@ class StatefulProcessorHandleImpl(
         listStateWithTTL
       case None =>
         stateVariables.add(new StateVariableInfo(stateName, ListState, true))
+        val colFamilySchema = resultState.columnFamilySchema
+        columnFamilySchemas.add(colFamilySchema)
         null
     }
   }
@@ -311,6 +320,8 @@ class StatefulProcessorHandleImpl(
         new MapStateImpl[K, V](store, stateName, keyEncoder, userKeyEnc, valEncoder)
       case None =>
         stateVariables.add(new StateVariableInfo(stateName, ValueState, false))
+        val colFamilySchema = resultState.columnFamilySchema
+        columnFamilySchemas.add(colFamilySchema)
         null
     }
   }
@@ -331,6 +342,8 @@ class StatefulProcessorHandleImpl(
         mapStateWithTTL
       case None =>
         stateVariables.add(new StateVariableInfo(stateName, MapState, true))
+        val colFamilySchema = resultState.columnFamilySchema
+        columnFamilySchemas.add(colFamilySchema)
         null
     }
   }

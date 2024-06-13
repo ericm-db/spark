@@ -20,7 +20,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.sql.Encoder
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchema.{KEY_ROW_SCHEMA, VALUE_ROW_SCHEMA}
-import org.apache.spark.sql.execution.streaming.state.{NoPrefixKeyStateEncoderSpec, StateStore}
+import org.apache.spark.sql.execution.streaming.state.{ColumnFamilySchemaV1, NoPrefixKeyStateEncoderSpec, StateStore}
 import org.apache.spark.sql.streaming.ValueState
 
 /**
@@ -32,6 +32,17 @@ import org.apache.spark.sql.streaming.ValueState
  * @param valEncoder - Spark SQL encoder for value
  * @tparam S - data type of object that will be stored
  */
+object ValueStateImpl {
+  def columnFamilySchema(stateName: String): ColumnFamilySchemaV1 = {
+    new ColumnFamilySchemaV1(
+      stateName,
+      KEY_ROW_SCHEMA,
+      VALUE_ROW_SCHEMA,
+      NoPrefixKeyStateEncoderSpec(KEY_ROW_SCHEMA),
+      false)
+  }
+}
+
 class ValueStateImpl[S](
     store: StateStore,
     stateName: String,
@@ -42,11 +53,12 @@ class ValueStateImpl[S](
   private val keySerializer = keyExprEnc.createSerializer()
   private val stateTypesEncoder = StateTypesEncoder(keySerializer, valEncoder, stateName)
 
+  val columnFamilySchema = new ColumnFamilySchemaV1(
+    stateName, KEY_ROW_SCHEMA, VALUE_ROW_SCHEMA, NoPrefixKeyStateEncoderSpec(KEY_ROW_SCHEMA), false)
   initialize()
 
   private def initialize(): Unit = {
-    store.createColFamilyIfAbsent(stateName, KEY_ROW_SCHEMA, VALUE_ROW_SCHEMA,
-      NoPrefixKeyStateEncoderSpec(KEY_ROW_SCHEMA))
+    store.createColFamilyIfAbsent(columnFamilySchema)
   }
 
   /** Function to check if state exists. Returns true if present and false otherwise */

@@ -130,6 +130,10 @@ private[sql] class HDFSBackedStateStoreProvider extends StateStoreProvider with 
       throw StateStoreErrors.multipleColumnFamiliesNotSupported(providerName)
     }
 
+    override def createColFamilyIfAbsent(colFamilyMetadata: ColumnFamilySchemaV1): Unit = {
+      throw StateStoreErrors.multipleColumnFamiliesNotSupported(providerName)
+    }
+
     // Multiple col families are not supported with HDFSBackedStateStoreProvider. Throw an exception
     // if the user tries to use a non-default col family.
     private def assertUseOfDefaultColFamily(colFamilyName: String): Unit = {

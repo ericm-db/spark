@@ -65,6 +65,16 @@ private[sql] class RocksDBStateStoreProvider
          RocksDBStateEncoder.getValueEncoder(valueSchema, useMultipleValuesPerKey)))
     }
 
+    override def createColFamilyIfAbsent(
+        colFamilyMetadata: ColumnFamilySchemaV1): Unit = {
+      createColFamilyIfAbsent(
+        colFamilyMetadata.columnFamilyName,
+        colFamilyMetadata.keySchema,
+        colFamilyMetadata.valueSchema,
+        colFamilyMetadata.keyStateEncoderSpec,
+        colFamilyMetadata.multipleValuesPerKey)
+    }
+
     override def get(key: UnsafeRow, colFamilyName: String): UnsafeRow = {
       verify(key != null, "Key cannot be null")
       val kvEncoder = keyValueEncoderMap.get(colFamilyName)
