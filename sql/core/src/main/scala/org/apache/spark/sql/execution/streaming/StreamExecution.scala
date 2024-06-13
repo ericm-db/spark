@@ -715,6 +715,8 @@ abstract class StreamExecution(
   protected def purgeOldest(): Unit = {
     operatorStateMetadataLogs.foreach(
       _._2.purgeOldest(minLogEntriesToMaintain))
+    stateSchemaLogs.foreach(
+      _._2.purgeOldest(minLogEntriesToMaintain))
   }
 }
 

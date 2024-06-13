@@ -909,10 +909,10 @@ class MicroBatchExecution(
     if (shouldWriteMetadatas) {
       execCtx.executionPlan.executedPlan.collect {
         case tws: TransformWithStateExec =>
-          val schema = tws.getColumnFamilyJValue()
           val metadata = tws.operatorStateMetadata()
           val id = metadata.operatorInfo.operatorId
           val schemaFile = stateSchemaLogs(id)
+          val schema = tws.getColumnFamilyJValue()
           if (!schemaFile.add(execCtx.batchId, schema)) {
             throw QueryExecutionErrors.concurrentStreamLogUpdate(execCtx.batchId)
           }

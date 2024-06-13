@@ -910,7 +910,6 @@ class TransformWithStateSuite extends StateStoreMetricsTest
           StopStream
         )
 
-        logError(s"### Restarting stream")
         val result2 = inputData.toDS()
           .groupByKey(x => x)
           .transformWithState(
