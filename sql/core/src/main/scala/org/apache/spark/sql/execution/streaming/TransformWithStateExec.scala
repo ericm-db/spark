@@ -384,9 +384,14 @@ case class TransformWithStateExec(
 
     validateTimeMode()
 
+    val existingColumnFamilies = columnFamilySchemas().map {
+      case c1: ColumnFamilySchemaV1 =>
+        c1.columnFamilyName -> c1
+    }.toMap
+
     val driverProcessorHandle = new StatefulProcessorHandleImpl(
       None, getStateInfo.queryRunId, keyEncoder, timeMode,
-      isStreaming, batchTimestampMs, metrics)
+      isStreaming, batchTimestampMs, metrics, existingColumnFamilies)
 
     driverProcessorHandle.setHandleState(StatefulProcessorHandleState.PRE_INIT)
     statefulProcessor.setHandle(driverProcessorHandle)

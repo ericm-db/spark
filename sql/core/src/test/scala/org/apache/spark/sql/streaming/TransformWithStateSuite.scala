@@ -926,8 +926,13 @@ class TransformWithStateSuite extends StateStoreMetricsTest
           ),
           AddData(inputData, "a"),
           AdvanceManualClock(1 * 1000),
-          CheckNewAnswer(("a", "1")),
-          StopStream
+          Execute { q =>
+            val e = intercept[Exception] {
+              q.processAllAvailable()
+            }
+            assert(e.getMessage.contains("State variable with name" +
+              " countState already exists with different schema"))
+          }
         )
       }
     }
