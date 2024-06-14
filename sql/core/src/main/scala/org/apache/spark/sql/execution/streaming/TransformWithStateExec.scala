@@ -92,8 +92,6 @@ case class TransformWithStateExec(
 
   override def shortName: String = "transformWithStateExec"
 
-  columnFamilySchemas()
-
   /** Metadata of this stateful operator and its states stores. */
   override def operatorStateMetadata(): OperatorStateMetadata = {
     val info = getStateInfo
@@ -101,21 +99,44 @@ case class TransformWithStateExec(
     val stateStoreInfo =
       Array(StateStoreMetadataV1(StateStoreId.DEFAULT_STORE_NAME, 0, info.numPartitions))
 
+    val driverProcessorHandle = getDriverProcessorHandle
+    val stateVariables = JArray(driverProcessorHandle.stateVariables.
+      asScala.map(_.jsonValue).toList)
+
+    closeProcessorHandle(driverProcessorHandle)
     val operatorPropertiesJson: JValue = ("timeMode" -> JString(timeMode.toString)) ~
       ("outputMode" -> JString(outputMode.toString)) ~
-      ("stateVariables" -> operatorProperties.get("stateVariables"))
+      ("stateVariables" -> stateVariables)
 
     val json = compact(render(operatorPropertiesJson))
     OperatorStateMetadataV2(operatorInfo, stateStoreInfo, json)
   }
 
-  def getColumnFamilyJValue(): JValue = {
-    val columnFamilySchemas = operatorProperties.get("columnFamilySchemas")
+  def getSchema(): JValue = {
+    val driverProcessorHandle = getDriverProcessorHandle
+    val columnFamilySchemas = JArray(driverProcessorHandle.
+      columnFamilySchemas.asScala.map(_.jsonValue).toList)
+    closeProcessorHandle(driverProcessorHandle)
     columnFamilySchemas
   }
 
-  def columnFamilySchemas(): List[ColumnFamilySchema] = {
-    ColumnFamilySchemaV1.fromJValue(columnFamilyJValue)
+  def compareSchemas(oldSchema: JValue, newSchema: JValue): Unit = {
+    val oldColumnFamilies = ColumnFamilySchemaV1.fromJValue(oldSchema)
+    val newColumnFamilies = ColumnFamilySchemaV1.fromJValue(newSchema).map {
+      case c1: ColumnFamilySchemaV1 =>
+          c1.columnFamilyName -> c1
+    }.toMap
+
+    oldColumnFamilies.foreach {
+      case oldColumnFamily: ColumnFamilySchemaV1 =>
+      newColumnFamilies.get(oldColumnFamily.columnFamilyName) match {
+        case Some(newColumnFamily) if oldColumnFamily.json != newColumnFamily.json =>
+          throw new RuntimeException(
+            s"State variable with name ${newColumnFamily.columnFamilyName}" +
+              s" already exists with different schema.")
+        case _ => // do nothing
+      }
+    }
   }
 
   override def shouldRunAnotherBatch(newInputWatermark: Long): Boolean = {
@@ -379,30 +400,26 @@ case class TransformWithStateExec(
     )
   }
 
+  protected def getDriverProcessorHandle: StatefulProcessorHandleImpl = {
+    val driverProcessorHandle = new StatefulProcessorHandleImpl(
+      None, getStateInfo.queryRunId, keyEncoder, timeMode,
+      isStreaming, batchTimestampMs, metrics)
+    driverProcessorHandle.setHandleState(StatefulProcessorHandleState.PRE_INIT)
+    statefulProcessor.setHandle(driverProcessorHandle)
+    statefulProcessor.init(outputMode, timeMode)
+    driverProcessorHandle
+  }
+
+  protected def closeProcessorHandle(processorHandle: StatefulProcessorHandleImpl): Unit = {
+    statefulProcessor.close()
+    statefulProcessor.setHandle(null)
+    processorHandle.setHandleState(StatefulProcessorHandleState.CLOSED)
+  }
+
   override protected def doExecute(): RDD[InternalRow] = {
     metrics // force lazy init at driver
 
     validateTimeMode()
-
-    val existingColumnFamilies = columnFamilySchemas().map {
-      case c1: ColumnFamilySchemaV1 =>
-        c1.columnFamilyName -> c1
-    }.toMap
-
-    val driverProcessorHandle = new StatefulProcessorHandleImpl(
-      None, getStateInfo.queryRunId, keyEncoder, timeMode,
-      isStreaming, batchTimestampMs, metrics, existingColumnFamilies)
-
-    driverProcessorHandle.setHandleState(StatefulProcessorHandleState.PRE_INIT)
-    statefulProcessor.setHandle(driverProcessorHandle)
-    statefulProcessor.init(outputMode, timeMode)
-    operatorProperties.put("stateVariables", JArray(driverProcessorHandle.stateVariables.
-        asScala.map(_.jsonValue).toList))
-    operatorProperties.put("columnFamilySchemas", JArray(driverProcessorHandle.
-      columnFamilySchemas.asScala.map(_.jsonValue).toList))
-
-    statefulProcessor.setHandle(null)
-    driverProcessorHandle.setHandleState(StatefulProcessorHandleState.CLOSED)
 
     if (hasInitialState) {
       val storeConf = new StateStoreConf(session.sqlContext.sessionState.conf)

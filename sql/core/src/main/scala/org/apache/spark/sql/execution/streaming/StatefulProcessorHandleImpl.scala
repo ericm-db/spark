@@ -133,19 +133,6 @@ class StatefulProcessorHandleImpl(
 
   def getHandleState: StatefulProcessorHandleState = currState
 
-  private def verifyStateVariableCreation(columnFamilySchema: ColumnFamilySchema): Unit = {
-    columnFamilySchema match {
-      case c1: ColumnFamilySchemaV1 if existingColumnFamilies.contains(c1.columnFamilyName) =>
-        val existingColumnFamily = existingColumnFamilies(c1.columnFamilyName)
-        if (existingColumnFamily.json != columnFamilySchema.json) {
-          throw new RuntimeException(
-            s"State variable with name ${c1.columnFamilyName} already exists " +
-              s"with different schema.")
-        }
-      case _ =>
-    }
-  }
-
   override def getValueState[T](
       stateName: String,
       valEncoder: Encoder[T]): ValueState[T] = {
@@ -157,7 +144,6 @@ class StatefulProcessorHandleImpl(
       case None =>
         stateVariables.add(new StateVariableInfo(stateName, ValueState, false))
         val colFamilySchema = ValueStateImpl.columnFamilySchema(stateName)
-        verifyStateVariableCreation(colFamilySchema)
         columnFamilySchemas.add(colFamilySchema)
         null
     }
@@ -179,7 +165,6 @@ class StatefulProcessorHandleImpl(
       case None =>
         stateVariables.add(new StateVariableInfo(stateName, ValueState, true))
         val colFamilySchema = ValueStateImplWithTTL.columnFamilySchema(stateName)
-        verifyStateVariableCreation(colFamilySchema)
         columnFamilySchemas.add(colFamilySchema)
         null
     }
@@ -287,7 +272,6 @@ class StatefulProcessorHandleImpl(
       case None =>
         stateVariables.add(new StateVariableInfo(stateName, ListState, false))
         val colFamilySchema = ListStateImpl.columnFamilySchema(stateName)
-        verifyStateVariableCreation(colFamilySchema)
         columnFamilySchemas.add(colFamilySchema)
         null
     }
@@ -325,7 +309,6 @@ class StatefulProcessorHandleImpl(
       case None =>
         stateVariables.add(new StateVariableInfo(stateName, ListState, true))
         val colFamilySchema = ListStateImplWithTTL.columnFamilySchema(stateName)
-        verifyStateVariableCreation(colFamilySchema)
         columnFamilySchemas.add(colFamilySchema)
         null
     }
@@ -343,7 +326,6 @@ class StatefulProcessorHandleImpl(
       case None =>
         stateVariables.add(new StateVariableInfo(stateName, ValueState, false))
         val colFamilySchema = MapStateImpl.columnFamilySchema(stateName)
-        verifyStateVariableCreation(colFamilySchema)
         columnFamilySchemas.add(colFamilySchema)
         null
     }
@@ -366,7 +348,6 @@ class StatefulProcessorHandleImpl(
       case None =>
         stateVariables.add(new StateVariableInfo(stateName, MapState, true))
         val colFamilySchema = MapStateImplWithTTL.columnFamilySchema(stateName)
-        verifyStateVariableCreation(colFamilySchema)
         columnFamilySchemas.add(colFamilySchema)
         null
     }

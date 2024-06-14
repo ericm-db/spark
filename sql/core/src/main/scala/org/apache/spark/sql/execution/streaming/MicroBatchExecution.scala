@@ -899,43 +899,6 @@ class MicroBatchExecution(
    */
   protected def markMicroBatchEnd(execCtx: MicroBatchExecutionContext): Unit = {
     watermarkTracker.updateWatermark(execCtx.executionPlan.executedPlan)
-    val shouldWriteMetadatas = execCtx.previousContext match {
-      case Some(prevCtx)
-        if prevCtx.executionPlan.runId == execCtx.executionPlan.runId =>
-        false
-      case _ => true
-    }
-
-    if (shouldWriteMetadatas) {
-      // clean up any batchIds that are greater than or equal to
-      // the current batchId
-      execCtx.executionPlan.executedPlan.collect {
-          case tws: TransformWithStateExec =>
-          val metadata = tws.operatorStateMetadata()
-          val id = metadata.operatorInfo.operatorId
-          val metadataFile = operatorStateMetadataLogs(id)
-          metadataFile.purgeAfter(execCtx.batchId - 1)
-      }
-      execCtx.executionPlan.executedPlan.collect {
-        case tws: TransformWithStateExec =>
-          val metadata = tws.operatorStateMetadata()
-          val id = metadata.operatorInfo.operatorId
-          val schemaFile = stateSchemaLogs(id)
-          val schema = tws.getColumnFamilyJValue()
-          if (!schemaFile.add(execCtx.batchId, schema)) {
-            throw QueryExecutionErrors.concurrentStreamLogUpdate(execCtx.batchId)
-          }
-      }
-      execCtx.executionPlan.executedPlan.collect {
-        case s: StateStoreWriter =>
-          val metadata = s.operatorStateMetadata()
-          val id = metadata.operatorInfo.operatorId
-          val metadataFile = operatorStateMetadataLogs(id)
-          if (!metadataFile.add(execCtx.batchId, metadata)) {
-            throw QueryExecutionErrors.concurrentStreamLogUpdate(execCtx.batchId)
-          }
-      }
-    }
     execCtx.reportTimeTaken("commitOffsets") {
       if (!commitLog.add(execCtx.batchId, CommitMetadata(watermarkTracker.currentWatermark))) {
         throw QueryExecutionErrors.concurrentStreamLogUpdate(execCtx.batchId)

@@ -21,6 +21,7 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 
 import org.apache.hadoop.fs.Path
+import org.json4s.JsonAST.JValue
 
 import org.apache.spark.internal.{Logging, MDC}
 import org.apache.spark.internal.LogKeys.{BATCH_TIMESTAMP, ERROR}
@@ -37,7 +38,7 @@ import org.apache.spark.sql.execution.datasources.v2.state.metadata.StateMetadat
 import org.apache.spark.sql.execution.exchange.ShuffleExchangeLike
 import org.apache.spark.sql.execution.python.FlatMapGroupsInPandasWithStateExec
 import org.apache.spark.sql.execution.streaming.sources.WriteToMicroBatchDataSourceV1
-import org.apache.spark.sql.execution.streaming.state.{OperatorStateMetadataV1, OperatorStateMetadataV2}
+import org.apache.spark.sql.execution.streaming.state.{OperatorStateMetadata, OperatorStateMetadataV1, OperatorStateMetadataV2}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.streaming.OutputMode
 import org.apache.spark.util.{SerializableConfiguration, Utils}
@@ -187,15 +188,48 @@ class IncrementalExecution(
     }
   }
 
+  def writeSchemaAndMetadataFiles(
+      stateSchemaV3File: StateSchemaV3File,
+      operatorStateMetadataLog: OperatorStateMetadataLog,
+      stateSchema: JValue,
+      operatorStateMetadata: OperatorStateMetadata): Unit = {
+    operatorStateMetadataLog.purgeAfter(currentBatchId - 1)
+    if (!stateSchemaV3File.add(currentBatchId, stateSchema)) {
+      throw QueryExecutionErrors.concurrentStreamLogUpdate(currentBatchId)
+    }
+    if (!operatorStateMetadataLog.add(currentBatchId, operatorStateMetadata)) {
+      throw QueryExecutionErrors.concurrentStreamLogUpdate(currentBatchId)
+    }
+  }
+
   object PopulateSchemaV3Rule extends SparkPlanPartialRule with Logging {
     override val rule: PartialFunction[SparkPlan, SparkPlan] = {
-      case tws: TransformWithStateExec if isFirstBatch && currentBatchId != 0 =>
+      case tws: TransformWithStateExec if isFirstBatch =>
         val stateSchemaV3File = new StateSchemaV3File(
           hadoopConf, tws.stateSchemaFilePath().toString)
+        val operatorStateMetadataLog = new OperatorStateMetadataLog(
+          hadoopConf,
+          tws.metadataFilePath().toString
+        )
         stateSchemaV3File.getLatest() match {
-          case Some((_, schemaJValue)) =>
-            tws.copy(columnFamilyJValue = Some(schemaJValue))
-          case None => tws
+          case Some((_, oldSchema)) =>
+            val newSchema = tws.getSchema()
+            tws.compareSchemas(oldSchema, newSchema)
+            writeSchemaAndMetadataFiles(
+              stateSchemaV3File = stateSchemaV3File,
+              operatorStateMetadataLog = operatorStateMetadataLog,
+              stateSchema = newSchema,
+              operatorStateMetadata = tws.operatorStateMetadata()
+            )
+            tws.copy(columnFamilyJValue = Some(oldSchema))
+          case None =>
+            writeSchemaAndMetadataFiles(
+              stateSchemaV3File = stateSchemaV3File,
+              operatorStateMetadataLog = operatorStateMetadataLog,
+              stateSchema = tws.getSchema(),
+              operatorStateMetadata = tws.operatorStateMetadata()
+            )
+            tws
         }
     }
   }
