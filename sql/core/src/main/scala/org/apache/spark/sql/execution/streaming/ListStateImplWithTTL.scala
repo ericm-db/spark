@@ -62,13 +62,10 @@ class ListStateImplWithTTL[S](
   private lazy val ttlExpirationMs =
     StateTTL.calculateExpirationTimeForDuration(ttlConfig.ttlDuration, batchTimestampMs)
 
-  val columnFamilySchema = new ColumnFamilySchemaV1(
-    stateName, KEY_ROW_SCHEMA, VALUE_ROW_SCHEMA_WITH_TTL,
-    NoPrefixKeyStateEncoderSpec(KEY_ROW_SCHEMA), true)
   initialize()
 
   private def initialize(): Unit = {
-    store.createColFamilyIfAbsent(columnFamilySchema)
+    store.createColFamilyIfAbsent(ListStateImplWithTTL.columnFamilySchema(stateName))
   }
 
   /** Whether state exists or not. */
