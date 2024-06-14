@@ -22,6 +22,17 @@ import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSch
 import org.apache.spark.sql.execution.streaming.state.{ColumnFamilySchemaV1, NoPrefixKeyStateEncoderSpec, StateStore}
 import org.apache.spark.sql.streaming.{TTLConfig, ValueState}
 
+object ValueStateImplWithTTL {
+  def columnFamilySchema(stateName: String): ColumnFamilySchemaV1 = {
+    new ColumnFamilySchemaV1(
+      stateName,
+      KEY_ROW_SCHEMA,
+      VALUE_ROW_SCHEMA_WITH_TTL,
+      NoPrefixKeyStateEncoderSpec(KEY_ROW_SCHEMA),
+      false)
+  }
+}
+
 /**
  * Class that provides a concrete implementation for a single value state associated with state
  * variables (with ttl expiration support) used in the streaming transformWithState operator.

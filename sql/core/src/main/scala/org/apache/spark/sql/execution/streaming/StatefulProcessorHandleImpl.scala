@@ -142,7 +142,7 @@ class StatefulProcessorHandleImpl(
         new ValueStateImpl[T](store, stateName, keyEncoder, valEncoder)
       case None =>
         stateVariables.add(new StateVariableInfo(stateName, ValueState, false))
-        val colFamilySchema = resultState.columnFamilySchema
+        val colFamilySchema = ValueStateImpl.columnFamilySchema(stateName)
         columnFamilySchemas.add(colFamilySchema)
         null
     }
@@ -163,7 +163,7 @@ class StatefulProcessorHandleImpl(
         valueStateWithTTL
       case None =>
         stateVariables.add(new StateVariableInfo(stateName, ValueState, true))
-        val colFamilySchema = resultState.columnFamilySchema
+        val colFamilySchema = ValueStateImplWithTTL.columnFamilySchema(stateName)
         columnFamilySchemas.add(colFamilySchema)
         null
     }
@@ -268,6 +268,8 @@ class StatefulProcessorHandleImpl(
         new ListStateImpl[T](store, stateName, keyEncoder, valEncoder)
       case None =>
         stateVariables.add(new StateVariableInfo(stateName, ListState, false))
+        val colFamilySchema = ListStateImpl.columnFamilySchema(stateName)
+        columnFamilySchemas.add(colFamilySchema)
         null
     }
   }
@@ -303,7 +305,7 @@ class StatefulProcessorHandleImpl(
         listStateWithTTL
       case None =>
         stateVariables.add(new StateVariableInfo(stateName, ListState, true))
-        val colFamilySchema = resultState.columnFamilySchema
+        val colFamilySchema = ListStateImplWithTTL.columnFamilySchema(stateName)
         columnFamilySchemas.add(colFamilySchema)
         null
     }
@@ -320,7 +322,7 @@ class StatefulProcessorHandleImpl(
         new MapStateImpl[K, V](store, stateName, keyEncoder, userKeyEnc, valEncoder)
       case None =>
         stateVariables.add(new StateVariableInfo(stateName, ValueState, false))
-        val colFamilySchema = resultState.columnFamilySchema
+        val colFamilySchema = MapStateImpl.columnFamilySchema(stateName)
         columnFamilySchemas.add(colFamilySchema)
         null
     }
@@ -342,7 +344,7 @@ class StatefulProcessorHandleImpl(
         mapStateWithTTL
       case None =>
         stateVariables.add(new StateVariableInfo(stateName, MapState, true))
-        val colFamilySchema = resultState.columnFamilySchema
+        val colFamilySchema = MapStateImplWithTTL.columnFamilySchema(stateName)
         columnFamilySchemas.add(colFamilySchema)
         null
     }

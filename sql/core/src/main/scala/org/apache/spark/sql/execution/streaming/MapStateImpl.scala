@@ -23,6 +23,16 @@ import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSch
 import org.apache.spark.sql.execution.streaming.state.{ColumnFamilySchemaV1, PrefixKeyScanStateEncoderSpec, StateStore, StateStoreErrors, UnsafeRowPair}
 import org.apache.spark.sql.streaming.MapState
 
+object MapStateImpl {
+  def columnFamilySchema(stateName: String): ColumnFamilySchemaV1 = {
+    new ColumnFamilySchemaV1(
+      stateName,
+      COMPOSITE_KEY_ROW_SCHEMA,
+      VALUE_ROW_SCHEMA,
+      PrefixKeyScanStateEncoderSpec(COMPOSITE_KEY_ROW_SCHEMA, 1), false)
+  }
+}
+
 class MapStateImpl[K, V](
     store: StateStore,
     stateName: String,

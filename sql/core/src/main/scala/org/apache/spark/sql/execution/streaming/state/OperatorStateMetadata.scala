@@ -25,13 +25,10 @@ import scala.reflect.ClassTag
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FSDataOutputStream, Path}
 import org.json4s.{Formats, NoTypeHints}
-import org.json4s.JsonAST.JValue
 import org.json4s.jackson.Serialization
 
-import org.apache.spark.SparkContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.execution.streaming.{CheckpointFileManager, MetadataVersionUtil}
-import org.apache.spark.util.AccumulatorV2
 
 /**
  * Metadata for a state store instance.

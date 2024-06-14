@@ -23,6 +23,16 @@ import org.apache.spark.sql.execution.streaming.state.{ColumnFamilySchemaV1, NoP
 import org.apache.spark.sql.streaming.{ListState, TTLConfig}
 import org.apache.spark.util.NextIterator
 
+object ListStateImplWithTTL {
+  def columnFamilySchema(stateName: String): ColumnFamilySchemaV1 = {
+    new ColumnFamilySchemaV1(
+      stateName,
+      KEY_ROW_SCHEMA,
+      VALUE_ROW_SCHEMA_WITH_TTL,
+      NoPrefixKeyStateEncoderSpec(KEY_ROW_SCHEMA),
+      true)
+  }
+}
 /**
  * Class that provides a concrete implementation for a list state state associated with state
  * variables (with ttl expiration support) used in the streaming transformWithState operator.
