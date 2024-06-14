@@ -907,6 +907,15 @@ class MicroBatchExecution(
     }
 
     if (shouldWriteMetadatas) {
+      // clean up any batchIds that are greater than or equal to
+      // the current batchId
+      execCtx.executionPlan.executedPlan.collect {
+          case tws: TransformWithStateExec =>
+          val metadata = tws.operatorStateMetadata()
+          val id = metadata.operatorInfo.operatorId
+          val metadataFile = operatorStateMetadataLogs(id)
+          metadataFile.purgeAfter(execCtx.batchId - 1)
+      }
       execCtx.executionPlan.executedPlan.collect {
         case tws: TransformWithStateExec =>
           val metadata = tws.operatorStateMetadata()
