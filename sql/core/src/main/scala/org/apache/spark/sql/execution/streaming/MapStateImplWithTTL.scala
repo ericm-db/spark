@@ -24,6 +24,16 @@ import org.apache.spark.sql.execution.streaming.state.{PrefixKeyScanStateEncoder
 import org.apache.spark.sql.streaming.{MapState, TTLConfig}
 import org.apache.spark.util.NextIterator
 
+object MapStateImplWithTTL {
+  def columnFamilySchema(stateName: String): ColumnFamilySchemaV1 = {
+    new ColumnFamilySchemaV1(
+      stateName,
+      COMPOSITE_KEY_ROW_SCHEMA,
+      VALUE_ROW_SCHEMA_WITH_TTL,
+      PrefixKeyScanStateEncoderSpec(COMPOSITE_KEY_ROW_SCHEMA, 1), false)
+  }
+}
+
 /**
  * Class that provides a concrete implementation for map state associated with state
  * variables (with ttl expiration support) used in the streaming transformWithState operator.
