@@ -64,6 +64,32 @@ class RunningCountStatefulProcessor extends StatefulProcessor[String, String, (S
   }
 }
 
+class RunningCountStatefulProcessorInt extends StatefulProcessor[String, String, (String, String)]
+  with Logging {
+  @transient protected var _countState: ValueState[Int] = _
+
+  override def init(
+      outputMode: OutputMode,
+      timeMode: TimeMode): Unit = {
+    _countState = getHandle.getValueState[Int]("countState", Encoders.scalaInt)
+  }
+
+  override def handleInputRows(
+      key: String,
+      inputRows: Iterator[String],
+      timerValues: TimerValues,
+      expiredTimerInfo: ExpiredTimerInfo): Iterator[(String, String)] = {
+    val count = _countState.getOption().getOrElse(0) + 1
+    if (count == 3) {
+      _countState.clear()
+      Iterator.empty
+    } else {
+      _countState.update(count)
+      Iterator((key, count.toString))
+    }
+  }
+}
+
 // Class to verify stateful processor usage with adding processing time timers
 class RunningCountStatefulProcessorWithProcTimeTimer extends RunningCountStatefulProcessor {
   private def handleProcessingTimeBasedTimers(
@@ -1052,6 +1078,42 @@ class TransformWithStateSuite extends StateStoreMetricsTest
 
         assert(latestSchema == schema1)
       }
+    }
+  }
+
+  // TODO: Enable this test and expect error to be thrown when
+  // github.com/apache/spark/pull/47257 is merged
+  ignore("test that invalid schema evolution fails query for column family") {
+    withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
+      classOf[RocksDBStateStoreProvider].getName,
+      SQLConf.SHUFFLE_PARTITIONS.key ->
+        TransformWithStateSuiteUtils.NUM_SHUFFLE_PARTITIONS.toString) {
+        withTempDir { checkpointDir =>
+          val inputData = MemoryStream[String]
+          val result1 = inputData.toDS()
+            .groupByKey(x => x)
+            .transformWithState(new RunningCountStatefulProcessor(),
+              TimeMode.None(),
+              OutputMode.Update())
+
+          testStream(result1, OutputMode.Update())(
+            StartStream(checkpointLocation = checkpointDir.getCanonicalPath),
+            AddData(inputData, "a"),
+            CheckNewAnswer(("a", "1")),
+            StopStream
+          )
+          val result2 = inputData.toDS()
+            .groupByKey(x => x)
+            .transformWithState(new RunningCountStatefulProcessorInt(),
+              TimeMode.None(),
+              OutputMode.Update())
+          testStream(result2, OutputMode.Update())(
+            StartStream(checkpointLocation = checkpointDir.getCanonicalPath),
+            AddData(inputData, "a"),
+            CheckNewAnswer(("a", "2")),
+            StopStream
+          )
+        }
     }
   }
 }
