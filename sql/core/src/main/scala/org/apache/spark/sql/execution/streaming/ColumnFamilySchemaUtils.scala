@@ -53,7 +53,7 @@ object ColumnFamilySchemaUtilsV1 extends ColumnFamilySchemaUtils {
       hasTtl: Boolean): ColumnFamilySchemaV1 = {
     new ColumnFamilySchemaV1(
       stateName,
-      keyEncoder.schema,
+      getKeySchema(keyEncoder.schema),
       getValueSchemaWithTTL(valEncoder.schema, hasTtl),
       NoPrefixKeyStateEncoderSpec(KEY_ROW_SCHEMA))
   }
@@ -65,7 +65,7 @@ object ColumnFamilySchemaUtilsV1 extends ColumnFamilySchemaUtils {
       hasTtl: Boolean): ColumnFamilySchemaV1 = {
     new ColumnFamilySchemaV1(
       stateName,
-      keyEncoder.schema,
+      getKeySchema(keyEncoder.schema),
       getValueSchemaWithTTL(valEncoder.schema, hasTtl),
       NoPrefixKeyStateEncoderSpec(KEY_ROW_SCHEMA))
   }

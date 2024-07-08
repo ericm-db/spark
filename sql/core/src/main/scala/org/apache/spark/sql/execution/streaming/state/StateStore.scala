@@ -298,8 +298,8 @@ object KeyStateEncoderSpec {
           asInstanceOf[List[_]].map(_.asInstanceOf[Int])
         RangeKeyScanStateEncoderSpec(keySchema, orderingOrdinals)
       case "PrefixKeyScanStateEncoderSpec" =>
-        val numColsPrefixKey = m("numColsPrefixKey").asInstanceOf[Int]
-        PrefixKeyScanStateEncoderSpec(keySchema, numColsPrefixKey)
+        val numColsPrefixKey = m("numColsPrefixKey").asInstanceOf[BigInt]
+        PrefixKeyScanStateEncoderSpec(keySchema, numColsPrefixKey.toInt)
     }
   }
 }

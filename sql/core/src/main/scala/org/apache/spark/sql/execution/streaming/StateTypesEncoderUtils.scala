@@ -41,18 +41,24 @@ object TransformWithStateKeyValueRowSchema {
     .add("value", BinaryType)
     .add("ttlExpirationMs", LongType)
 
+  /** Helper functions for passing the key/value schema to write to state schema metadata. */
+
   /**
-   * Helper function for passing the key/value schema to write to state schema metadata.
+   * Return key schema with key column name.
+   */
+  def getKeySchema(schema: StructType): StructType = {
+    new StructType().add("key", schema)
+  }
+
+  /**
    * Return value schema with additional TTL column if TTL is enabled.
-   *
-   * @param schema Value Schema returned by value encoder that user passed in
-   * @param hasTTL TTL enabled or not
-   * @return a schema with additional TTL column if TTL is enabled.
    */
   def getValueSchemaWithTTL(schema: StructType, hasTTL: Boolean): StructType = {
-    if (hasTTL) {
+    val valSchema = if (hasTTL) {
       new StructType(schema.fields).add("ttlExpirationMs", LongType)
     } else schema
+    new StructType()
+      .add("value", valSchema)
   }
 
   /**
@@ -61,7 +67,9 @@ object TransformWithStateKeyValueRowSchema {
   def getCompositeKeySchema(
       groupingKeySchema: StructType,
       userKeySchema: StructType): StructType = {
-    new StructType(groupingKeySchema.fields ++ userKeySchema.fields)
+    new StructType()
+      .add("key", new StructType(groupingKeySchema.fields))
+      .add("userKey", new StructType(userKeySchema.fields))
   }
 }
 
