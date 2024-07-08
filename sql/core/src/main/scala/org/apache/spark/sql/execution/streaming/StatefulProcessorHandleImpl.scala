@@ -87,7 +87,7 @@ class StatefulProcessorHandleImpl(
     isStreaming: Boolean = true,
     batchTimestampMs: Option[Long] = None,
     metrics: Map[String, SQLMetric] = Map.empty)
-  extends StatefulProcessorHandleImplBase(timeMode) with Logging {
+  extends StatefulProcessorHandleImplBase(timeMode, keyEncoder) with Logging {
   import StatefulProcessorHandleState._
 
   /**
@@ -297,8 +297,8 @@ class StatefulProcessorHandleImpl(
  * actually done. We need this class because we can only collect the schemas after
  * the StatefulProcessor is initialized.
  */
-class DriverStatefulProcessorHandleImpl(timeMode: TimeMode)
-  extends StatefulProcessorHandleImplBase(timeMode) {
+class DriverStatefulProcessorHandleImpl(timeMode: TimeMode, keyExprEnc: ExpressionEncoder[Any])
+  extends StatefulProcessorHandleImplBase(timeMode, keyExprEnc) {
 
   private[sql] val columnFamilySchemaUtils = ColumnFamilySchemaUtilsV1
 
