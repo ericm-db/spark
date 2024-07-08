@@ -26,6 +26,11 @@ import org.apache.spark.sql.execution.streaming.state.StateStoreErrors
 import org.apache.spark.sql.types.{BinaryType, LongType, StructType}
 
 object TransformWithStateKeyValueRowSchema {
+  /**
+   * The following are the key/value row schema used in StateStore layer.
+   * Key/value rows will be serialized into Binary format in `StateTypesEncoder`.
+   * The "real" key/value row schema will be written into state schema metadata.
+   */
   val KEY_ROW_SCHEMA: StructType = new StructType().add("key", BinaryType)
   val COMPOSITE_KEY_ROW_SCHEMA: StructType = new StructType()
     .add("key", BinaryType)
@@ -35,6 +40,29 @@ object TransformWithStateKeyValueRowSchema {
   val VALUE_ROW_SCHEMA_WITH_TTL: StructType = new StructType()
     .add("value", BinaryType)
     .add("ttlExpirationMs", LongType)
+
+  /**
+   * Helper function for passing the key/value schema to write to state schema metadata.
+   * Return value schema with additional TTL column if TTL is enabled.
+   *
+   * @param schema Value Schema returned by value encoder that user passed in
+   * @param hasTTL TTL enabled or not
+   * @return a schema with additional TTL column if TTL is enabled.
+   */
+  def getValueSchemaWithTTL(schema: StructType, hasTTL: Boolean): StructType = {
+    if (hasTTL) {
+      new StructType(schema.fields).add("ttlExpirationMs", LongType)
+    } else schema
+  }
+
+  /**
+   * Given grouping key and user key schema, return the schema of the composite key.
+   */
+  def getCompositeKeySchema(
+      groupingKeySchema: StructType,
+      userKeySchema: StructType): StructType = {
+    new StructType(groupingKeySchema.fields ++ userKeySchema.fields)
+  }
 }
 
 /**
