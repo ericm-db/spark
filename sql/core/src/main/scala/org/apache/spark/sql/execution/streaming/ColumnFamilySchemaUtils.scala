@@ -51,7 +51,7 @@ object ColumnFamilySchemaUtilsV1 extends ColumnFamilySchemaUtils {
       keyEncoder: ExpressionEncoder[Any],
       valEncoder: Encoder[T],
       hasTtl: Boolean): ColumnFamilySchemaV1 = {
-    new ColumnFamilySchemaV1(
+    ColumnFamilySchemaV1(
       stateName,
       getKeySchema(keyEncoder.schema),
       getValueSchemaWithTTL(valEncoder.schema, hasTtl),
@@ -63,7 +63,7 @@ object ColumnFamilySchemaUtilsV1 extends ColumnFamilySchemaUtils {
       keyEncoder: ExpressionEncoder[Any],
       valEncoder: Encoder[T],
       hasTtl: Boolean): ColumnFamilySchemaV1 = {
-    new ColumnFamilySchemaV1(
+    ColumnFamilySchemaV1(
       stateName,
       getKeySchema(keyEncoder.schema),
       getValueSchemaWithTTL(valEncoder.schema, hasTtl),
@@ -77,7 +77,7 @@ object ColumnFamilySchemaUtilsV1 extends ColumnFamilySchemaUtils {
       valEncoder: Encoder[V],
       hasTtl: Boolean): ColumnFamilySchemaV1 = {
     val compositeKeySchema = getCompositeKeySchema(keyEncoder.schema, userKeyEnc.schema)
-    new ColumnFamilySchemaV1(
+    ColumnFamilySchemaV1(
       stateName,
       compositeKeySchema,
       getValueSchemaWithTTL(valEncoder.schema, hasTtl),

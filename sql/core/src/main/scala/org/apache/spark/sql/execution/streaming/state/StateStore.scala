@@ -296,7 +296,7 @@ object KeyStateEncoderSpec {
         NoPrefixKeyStateEncoderSpec(KEY_ROW_SCHEMA)
       case "RangeKeyScanStateEncoderSpec" =>
         val orderingOrdinals = m("orderingOrdinals").
-          asInstanceOf[List[_]].map(_.asInstanceOf[Int])
+          asInstanceOf[List[_]].map(_.asInstanceOf[BigInt].toInt)
         RangeKeyScanStateEncoderSpec(keySchema, orderingOrdinals)
       case "PrefixKeyScanStateEncoderSpec" =>
         val numColsPrefixKey = m("numColsPrefixKey").asInstanceOf[BigInt]
