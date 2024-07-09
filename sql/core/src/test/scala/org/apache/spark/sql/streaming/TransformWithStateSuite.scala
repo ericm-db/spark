@@ -884,7 +884,6 @@ class TransformWithStateSuite extends StateStoreMetricsTest
 
         val columnFamilySchemas = fetchColumnFamilySchemas(chkptDir.getCanonicalPath, 0)
         assert(columnFamilySchemas.length == 1)
-
         val expected = ColumnFamilySchemaV1(
           "countState",
           new StructType().add("key",
