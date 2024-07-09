@@ -27,8 +27,8 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.sql.{Dataset, Encoders, Row}
 import org.apache.spark.sql.catalyst.util.stringToFile
 import org.apache.spark.sql.execution.streaming._
-import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchema.{COMPOSITE_KEY_ROW_SCHEMA, KEY_ROW_SCHEMA, VALUE_ROW_SCHEMA}
-import org.apache.spark.sql.execution.streaming.state.{AlsoTestWithChangelogCheckpointingEnabled, ColumnFamilySchema, ColumnFamilySchemaV1, NoPrefixKeyStateEncoderSpec, OperatorStateMetadataV2, POJOTestClass, PrefixKeyScanStateEncoderSpec, RocksDBStateStoreProvider, StatefulProcessorCannotPerformOperationWithInvalidHandleState, StateSchemaV3File, StateStoreMultipleColumnFamiliesNotSupportedException, TestClass}
+import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchema.{COMPOSITE_KEY_ROW_SCHEMA, KEY_ROW_SCHEMA}
+import org.apache.spark.sql.execution.streaming.state.{AlsoTestWithChangelogCheckpointingEnabled, ColumnFamilySchema, ColumnFamilySchemaV1, NoPrefixKeyStateEncoderSpec, OperatorInfoV1, OperatorStateMetadataV2, POJOTestClass, PrefixKeyScanStateEncoderSpec, RocksDBStateStoreProvider, StatefulProcessorCannotPerformOperationWithInvalidHandleState, StateSchemaV3File, StateStoreMetadataV2, StateStoreMultipleColumnFamiliesNotSupportedException, StateStoreValueSchemaNotCompatible, TestClass}
 import org.apache.spark.sql.functions.timestamp_seconds
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.streaming.util.StreamManualClock
@@ -881,11 +881,12 @@ class TransformWithStateSuite extends StateStoreMetricsTest
 
         val columnFamilySchemas = fetchColumnFamilySchemas(chkptDir.getCanonicalPath, 0)
         assert(columnFamilySchemas.length == 1)
-
         val expected = ColumnFamilySchemaV1(
           "countState",
-          KEY_ROW_SCHEMA,
-          VALUE_ROW_SCHEMA,
+          new StructType().add("key",
+            new StructType().add("value", StringType)),
+          new StructType().add("value",
+            new StructType().add("value", LongType, false)),
           NoPrefixKeyStateEncoderSpec(KEY_ROW_SCHEMA),
           None
         )
@@ -922,18 +923,20 @@ class TransformWithStateSuite extends StateStoreMetricsTest
         val expected = List(
           ColumnFamilySchemaV1(
             "countState",
-            KEY_ROW_SCHEMA,
+            new StructType().add("key",
+              new StructType().add("value", StringType)),
+            new StructType().add("value",
+              new StructType().add("value", LongType, false)),
             NoPrefixKeyStateEncoderSpec(KEY_ROW_SCHEMA),
-            false,
-            Encoders.scalaLong.schema,
             None
           ),
           ColumnFamilySchemaV1(
             "mostRecent",
-            KEY_ROW_SCHEMA,
+            new StructType().add("key",
+              new StructType().add("value", StringType)),
+            new StructType().add("value",
+              new StructType().add("value", StringType, true)),
             NoPrefixKeyStateEncoderSpec(KEY_ROW_SCHEMA),
-            false,
-            Encoders.STRING.schema,
             None
           )
         )
@@ -1017,8 +1020,10 @@ class TransformWithStateSuite extends StateStoreMetricsTest
       withTempDir { checkpointDir =>
         val schema = List(ColumnFamilySchemaV1(
           "countState",
-          KEY_ROW_SCHEMA,
-          VALUE_ROW_SCHEMA,
+          new StructType().add("key",
+            new StructType().add("value", StringType)),
+          new StructType().add("value",
+            new StructType().add("value", LongType, false)),
           NoPrefixKeyStateEncoderSpec(KEY_ROW_SCHEMA),
           None
         ))
@@ -1042,8 +1047,10 @@ class TransformWithStateSuite extends StateStoreMetricsTest
 
         val schema0 = List(ColumnFamilySchemaV1(
           "countState",
-          KEY_ROW_SCHEMA,
-          VALUE_ROW_SCHEMA,
+          new StructType().add("key",
+            new StructType().add("value", StringType)),
+          new StructType().add("value",
+            new StructType().add("value", LongType, false)),
           NoPrefixKeyStateEncoderSpec(KEY_ROW_SCHEMA),
           None
         ))
@@ -1051,15 +1058,19 @@ class TransformWithStateSuite extends StateStoreMetricsTest
         val schema1 = List(
           ColumnFamilySchemaV1(
             "countState",
-            KEY_ROW_SCHEMA,
-            VALUE_ROW_SCHEMA,
+            new StructType().add("key",
+              new StructType().add("value", StringType)),
+            new StructType().add("value",
+              new StructType().add("value", LongType, false)),
             NoPrefixKeyStateEncoderSpec(KEY_ROW_SCHEMA),
             None
           ),
           ColumnFamilySchemaV1(
             "mostRecent",
-            KEY_ROW_SCHEMA,
-            VALUE_ROW_SCHEMA,
+            new StructType().add("key",
+              new StructType().add("value", StringType)),
+            new StructType().add("value",
+              new StructType().add("value", StringType, false)),
             NoPrefixKeyStateEncoderSpec(KEY_ROW_SCHEMA),
             None
           )
@@ -1081,9 +1092,7 @@ class TransformWithStateSuite extends StateStoreMetricsTest
     }
   }
 
-  // TODO: Enable this test and expect error to be thrown when
-  // github.com/apache/spark/pull/47257 is merged
-  ignore("test that invalid schema evolution fails query for column family") {
+  test("test that invalid schema evolution fails query for column family") {
     withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
       classOf[RocksDBStateStoreProvider].getName,
       SQLConf.SHUFFLE_PARTITIONS.key ->
@@ -1110,8 +1119,11 @@ class TransformWithStateSuite extends StateStoreMetricsTest
           testStream(result2, OutputMode.Update())(
             StartStream(checkpointLocation = checkpointDir.getCanonicalPath),
             AddData(inputData, "a"),
-            CheckNewAnswer(("a", "2")),
-            StopStream
+            ExpectFailure[StateStoreValueSchemaNotCompatible] {
+              (t: Throwable) => {
+                assert(t.getMessage.contains("Please check number and type of fields."))
+              }
+            }
           )
         }
     }
