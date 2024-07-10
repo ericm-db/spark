@@ -26,7 +26,6 @@ import scala.io.{Source => IOSource}
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
 
-import org.apache.spark.internal.Logging
 import org.apache.spark.sql.execution.streaming.CheckpointFileManager
 import org.apache.spark.sql.execution.streaming.MetadataVersionUtil.validateVersion
 
@@ -40,7 +39,7 @@ import org.apache.spark.sql.execution.streaming.MetadataVersionUtil.validateVers
  */
 class StateSchemaV3File(
     hadoopConf: Configuration,
-    path: String) extends Logging {
+    path: String) {
 
   val metadataPath = new Path(path)
 
