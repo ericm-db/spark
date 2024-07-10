@@ -293,14 +293,14 @@ object KeyStateEncoderSpec {
     // match on type
     m("keyStateEncoderType").asInstanceOf[String] match {
       case "NoPrefixKeyStateEncoderSpec" =>
-        NoPrefixKeyStateEncoderSpec(keySchema)
+        NoPrefixKeyStateEncoderSpec(KEY_ROW_SCHEMA)
       case "RangeKeyScanStateEncoderSpec" =>
         val orderingOrdinals = m("orderingOrdinals").
           asInstanceOf[List[_]].map(_.asInstanceOf[BigInt].toInt)
         RangeKeyScanStateEncoderSpec(keySchema, orderingOrdinals)
       case "PrefixKeyScanStateEncoderSpec" =>
-        val numColsPrefixKey = m("numColsPrefixKey").asInstanceOf[BigInt].toInt
-        PrefixKeyScanStateEncoderSpec(COMPOSITE_KEY_ROW_SCHEMA, numColsPrefixKey)
+        val numColsPrefixKey = m("numColsPrefixKey").asInstanceOf[BigInt]
+        PrefixKeyScanStateEncoderSpec(COMPOSITE_KEY_ROW_SCHEMA, numColsPrefixKey.toInt)
     }
   }
 }
