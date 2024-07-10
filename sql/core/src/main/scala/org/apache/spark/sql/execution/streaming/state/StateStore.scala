@@ -293,7 +293,7 @@ object KeyStateEncoderSpec {
     // match on type
     m("keyStateEncoderType").asInstanceOf[String] match {
       case "NoPrefixKeyStateEncoderSpec" =>
-        NoPrefixKeyStateEncoderSpec(KEY_ROW_SCHEMA)
+        NoPrefixKeyStateEncoderSpec(keySchema)
       case "RangeKeyScanStateEncoderSpec" =>
         val orderingOrdinals = m("orderingOrdinals").
           asInstanceOf[List[_]].map(_.asInstanceOf[BigInt].toInt)
