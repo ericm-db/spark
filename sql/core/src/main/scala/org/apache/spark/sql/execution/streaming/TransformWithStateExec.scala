@@ -21,9 +21,10 @@ import java.util.concurrent.TimeUnit.NANOSECONDS
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
+import org.json4s.{DefaultFormats, JString}
 import org.json4s.JsonAST.JValue
 import org.json4s.JsonDSL._
-import org.json4s.JString
+import org.json4s.jackson.JsonMethods
 import org.json4s.jackson.JsonMethods.{compact, render}
 
 import org.apache.spark.broadcast.Broadcast
@@ -431,10 +432,39 @@ case class TransformWithStateExec(
     }
   }
 
-  private def validateMetadatas(
+  def validateMetadatas(
     oldMetadata: OperatorStateMetadata,
     newMetadata: OperatorStateMetadata): Unit = {
-
+    // if both metadatas are instance of OperatorStateMetadatV2
+    (oldMetadata, newMetadata) match {
+      case (oldMetadataV2: OperatorStateMetadataV2,
+        newMetadataV2: OperatorStateMetadataV2) =>
+        val oldJsonString = oldMetadataV2.operatorPropertiesJson
+        val newJsonString = newMetadataV2.operatorPropertiesJson
+        // verify that timeMode, outputMode are the same
+        implicit val formats: DefaultFormats.type = DefaultFormats
+        val oldJsonProps = JsonMethods.parse(oldJsonString).extract[Map[String, Any]]
+        val newJsonProps = JsonMethods.parse(newJsonString).extract[Map[String, Any]]
+        val oldTimeMode = oldJsonProps("timeMode").asInstanceOf[String]
+        val oldOutputMode = oldJsonProps("outputMode").asInstanceOf[String]
+        val newTimeMode = newJsonProps("timeMode").asInstanceOf[String]
+        val newOutputMode = newJsonProps("outputMode").asInstanceOf[String]
+        if (oldTimeMode != newTimeMode) {
+          throw new StateStoreInvalidConfigAfterRestart(
+            "timeMode",
+            oldTimeMode,
+            newTimeMode
+          )
+        }
+        if (oldOutputMode != newOutputMode) {
+          throw new StateStoreInvalidConfigAfterRestart(
+            "outputMode",
+            oldOutputMode,
+            newOutputMode
+          )
+        }
+      case (_, _) =>
+    }
   }
 
   /** Metadata of this stateful operator and its states stores. */

@@ -3804,6 +3804,12 @@
     ],
     "sqlState" : "42802"
   },
+  "STATE_STORE_INVALID_CONFIG_AFTER_RESTART" : {
+    "message" : [
+      "<configName> <oldConfig> is not equal to <newConfig>. Please set <configName> to <oldConfig>, or restart with a new checkpoint directory."
+    ],
+    "sqlState" : "42K06"
+  },
   "STATE_STORE_INVALID_PROVIDER" : {
     "message" : [
       "The given State Store Provider <inputClass> does not extend org.apache.spark.sql.execution.streaming.state.StateStoreProvider."

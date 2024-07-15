@@ -173,7 +173,22 @@ object StateStoreErrors {
     StateStoreProviderDoesNotSupportFineGrainedReplay = {
     new StateStoreProviderDoesNotSupportFineGrainedReplay(inputClass)
   }
+
+  def invalidConfigChangedAfterRestart(configName: String, oldConfig: String, newConfig: String):
+    StateStoreInvalidConfigAfterRestart = {
+    new StateStoreInvalidConfigAfterRestart(configName, oldConfig, newConfig)
+  }
 }
+
+class StateStoreInvalidConfigAfterRestart(configName: String, oldConfig: String, newConfig: String)
+  extends SparkUnsupportedOperationException(
+    errorClass = "STATE_STORE_INVALID_CONFIG_AFTER_RESTART",
+    messageParameters = Map(
+      "configName" -> configName,
+      "oldConfig" -> oldConfig,
+      "newConfig" -> newConfig
+    )
+  )
 
 class StateStoreMultipleColumnFamiliesNotSupportedException(stateStoreProvider: String)
   extends SparkUnsupportedOperationException(

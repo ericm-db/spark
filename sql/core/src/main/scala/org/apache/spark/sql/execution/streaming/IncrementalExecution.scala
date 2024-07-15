@@ -243,6 +243,12 @@ class IncrementalExecution(
                   checkpointLocation, tws.getStateInfo.operatorId.toString))
                 val operatorStateMetadataLog = new OperatorStateMetadataLog(sparkSession,
                   metadataPath.toString)
+                // check if old metadata is present. if it is, validate with this metadata
+                operatorStateMetadataLog.getLatest() match {
+                  case Some((_, oldMetadata)) =>
+                    tws.validateMetadatas(oldMetadata, metadata)
+                  case None =>
+                }
                 operatorStateMetadataLog.add(currentBatchId, metadata)
               case _ =>
                 val metadataWriter = new OperatorStateMetadataWriter(new Path(
