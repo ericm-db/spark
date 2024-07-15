@@ -431,6 +431,12 @@ case class TransformWithStateExec(
     }
   }
 
+  private def validateMetadatas(
+    oldMetadata: OperatorStateMetadata,
+    newMetadata: OperatorStateMetadata): Unit = {
+
+  }
+
   /** Metadata of this stateful operator and its states stores. */
   override def operatorStateMetadata(
       stateSchemaPaths: Array[String] = Array.empty): OperatorStateMetadata = {
