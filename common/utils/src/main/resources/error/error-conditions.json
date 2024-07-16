@@ -3816,6 +3816,12 @@
     ],
     "sqlState" : "42K06"
   },
+  "STATE_STORE_INVALID_VARIABLE_TYPE_CHANGE" : {
+    "message" : [
+      "Cannot change <stateName> to <newType> between query restarts. Please set <stateName> to <oldType>, or restart with a new checkpoint directory."
+    ],
+    "sqlState" : "42K06"
+  },
   "STATE_STORE_KEY_ROW_FORMAT_VALIDATION_FAILURE" : {
     "message" : [
       "The streaming query failed to validate written state for key row.",

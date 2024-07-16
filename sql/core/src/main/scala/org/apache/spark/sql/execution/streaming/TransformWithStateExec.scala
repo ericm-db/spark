@@ -28,6 +28,7 @@ import org.json4s.jackson.JsonMethods
 import org.json4s.jackson.JsonMethods.{compact, render}
 
 import org.apache.spark.broadcast.Broadcast
+import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
@@ -81,7 +82,8 @@ case class TransformWithStateExec(
     initialStateDataAttrs: Seq[Attribute],
     initialStateDeserializer: Expression,
     initialState: SparkPlan)
-  extends BinaryExecNode with StateStoreWriter with WatermarkSupport with ObjectProducerExec {
+  extends BinaryExecNode with StateStoreWriter with WatermarkSupport with ObjectProducerExec
+    with Logging {
 
   override def shortName: String = "transformWithStateExec"
 
@@ -121,6 +123,12 @@ case class TransformWithStateExec(
     val columnFamilySchemas = getDriverProcessorHandle().getColumnFamilySchemas
     closeProcessorHandle()
     columnFamilySchemas
+  }
+
+  private def getStateVariableInfos(): Map[String, TransformWithStateVariableInfo] = {
+    val stateVariableInfos = getDriverProcessorHandle().getStateVariableInfos
+    closeProcessorHandle()
+    stateVariableInfos
   }
 
   /**
@@ -450,18 +458,37 @@ case class TransformWithStateExec(
         val newTimeMode = newJsonProps("timeMode").asInstanceOf[String]
         val newOutputMode = newJsonProps("outputMode").asInstanceOf[String]
         if (oldTimeMode != newTimeMode) {
-          throw new StateStoreInvalidConfigAfterRestart(
+          throw StateStoreErrors.invalidConfigChangedAfterRestart(
             "timeMode",
             oldTimeMode,
             newTimeMode
           )
         }
         if (oldOutputMode != newOutputMode) {
-          throw new StateStoreInvalidConfigAfterRestart(
+          throw StateStoreErrors.invalidConfigChangedAfterRestart(
             "outputMode",
             oldOutputMode,
             newOutputMode
           )
+        }
+        // compare state variable infos
+        val oldStateVariableInfos = oldJsonProps("stateVariables").
+          asInstanceOf[List[Map[String, Any]]]
+          .map(TransformWithStateVariableInfo.fromMap)
+        val newStateVariableInfos = getStateVariableInfos()
+        oldStateVariableInfos.foreach { oldInfo =>
+            val newInfo = newStateVariableInfos.get(oldInfo.stateName)
+            newInfo match {
+              case Some(stateVarInfo) =>
+                if (oldInfo.stateVariableType != stateVarInfo.stateVariableType) {
+                  throw StateStoreErrors.invalidVariableTypeChange(
+                    stateVarInfo.stateName,
+                    oldInfo.stateVariableType.toString,
+                    stateVarInfo.stateVariableType.toString
+                  )
+                }
+            case None =>
+          }
         }
       case (_, _) =>
     }
@@ -479,7 +506,10 @@ case class TransformWithStateExec(
 
     val operatorPropertiesJson: JValue =
       ("timeMode" -> JString(timeMode.toString)) ~
-      ("outputMode" -> JString(outputMode.toString))
+      ("outputMode" -> JString(outputMode.toString)) ~
+      ("stateVariables" -> getStateVariableInfos().map { case (_, stateInfo) =>
+        stateInfo.jsonValue
+      }.arr)
 
     val json = compact(render(operatorPropertiesJson))
     OperatorStateMetadataV2(operatorInfo, stateStoreInfo, json)

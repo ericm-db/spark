@@ -178,6 +178,11 @@ object StateStoreErrors {
     StateStoreInvalidConfigAfterRestart = {
     new StateStoreInvalidConfigAfterRestart(configName, oldConfig, newConfig)
   }
+
+  def invalidVariableTypeChange(stateName: String, oldType: String, newType: String):
+  StateStoreInvalidVariableTypeChange = {
+  new StateStoreInvalidVariableTypeChange(stateName, oldType, newType)
+  }
 }
 
 class StateStoreInvalidConfigAfterRestart(configName: String, oldConfig: String, newConfig: String)
@@ -187,6 +192,16 @@ class StateStoreInvalidConfigAfterRestart(configName: String, oldConfig: String,
       "configName" -> configName,
       "oldConfig" -> oldConfig,
       "newConfig" -> newConfig
+    )
+  )
+
+class StateStoreInvalidVariableTypeChange(stateName: String, oldType: String, newType: String)
+  extends SparkUnsupportedOperationException(
+    errorClass = "STATE_STORE_INVALID_VARIABLE_TYPE_CHANGE",
+    messageParameters = Map(
+      "stateName" -> stateName,
+      "oldType" -> oldType,
+      "newType" -> newType
     )
   )
 
