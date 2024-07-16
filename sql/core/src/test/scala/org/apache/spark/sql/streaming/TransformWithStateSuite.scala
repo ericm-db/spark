@@ -973,7 +973,7 @@ class TransformWithStateSuite extends StateStoreMetricsTest
   }
 
   test("transformWithState - verify that OperatorStateMetadataV2" +
-    " file is being written correctly") {
+    " integrates with state-metadata source") {
     withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
       classOf[RocksDBStateStoreProvider].getName,
       SQLConf.SHUFFLE_PARTITIONS.key ->
@@ -1002,16 +1002,19 @@ class TransformWithStateSuite extends StateStoreMetricsTest
           Row(0, "transformWithStateExec", "default", 5, 0L, 0L),
           Row(0, "transformWithStateExec", "default", 5, 1L, 1L)
         ))
+        // need line to be unbroken, otherwise the test will fail.
+        // scalastyle:off
+        val expectedAnswer = """{"timeMode":"NoTime","outputMode":"Update","stateVariables":[{"stateName":"countState","stateVariableType":"ValueState","ttlEnabled":false}]}"""
+        // scalastyle:on
         checkAnswer(df.select(df.metadataColumn("_operatorProperties")),
           Seq(
-            Row("""{"timeMode":"NoTime","outputMode":"Update"}"""),
-            Row("""{"timeMode":"NoTime","outputMode":"Update"}""")
+            Row(expectedAnswer),
+            Row(expectedAnswer)
           )
         )
       }
     }
   }
-
 
   test("transformWithState - verify that metadata logs are purged") {
     withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
