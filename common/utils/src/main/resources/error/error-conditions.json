@@ -3785,6 +3785,12 @@
     ],
     "sqlState" : "42802"
   },
+  "STATE_STORE_DUPLICATE_STATE_VARIABLE_DEFINED" : {
+    "message" : [
+      "State variable with name <stateName> has already been defined in the StatefulProcessor."
+    ],
+    "sqlState" : "42802"
+  },
   "STATE_STORE_HANDLE_NOT_INITIALIZED" : {
     "message" : [
       "The handle has not been initialized for this StatefulProcessor.",

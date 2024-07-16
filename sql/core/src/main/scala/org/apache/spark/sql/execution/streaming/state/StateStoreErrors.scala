@@ -179,11 +179,23 @@ object StateStoreErrors {
     new StateStoreInvalidConfigAfterRestart(configName, oldConfig, newConfig)
   }
 
+  def duplicateStateVariableDefined(stateName: String):
+  StateStoreDuplicateStateVariableDefined = {
+    new StateStoreDuplicateStateVariableDefined(stateName)
+  }
+
   def invalidVariableTypeChange(stateName: String, oldType: String, newType: String):
   StateStoreInvalidVariableTypeChange = {
   new StateStoreInvalidVariableTypeChange(stateName, oldType, newType)
   }
 }
+class StateStoreDuplicateStateVariableDefined(stateName: String)
+  extends SparkRuntimeException(
+    errorClass = "STATE_STORE_DUPLICATE_STATE_VARIABLE_DEFINED",
+    messageParameters = Map(
+      "stateName" -> stateName
+    )
+  )
 
 class StateStoreInvalidConfigAfterRestart(configName: String, oldConfig: String, newConfig: String)
   extends SparkUnsupportedOperationException(
