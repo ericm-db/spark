@@ -212,6 +212,10 @@ trait StateStoreWriter extends StatefulOperator with PythonSQLMetrics { self: Sp
   /** Records the duration of running `body` for the next query progress update. */
   protected def timeTakenMs(body: => Unit): Long = Utils.timeTakenMs(body)._2
 
+  def validateNewMetadata(
+      oldMetadata: OperatorStateMetadata,
+      newMetadata: OperatorStateMetadata): Unit = {}
+
   /** Metadata of this stateful operator and its states stores. */
   def operatorStateMetadata(
       stateSchemaPaths: List[String] = List.empty): OperatorStateMetadata = {
