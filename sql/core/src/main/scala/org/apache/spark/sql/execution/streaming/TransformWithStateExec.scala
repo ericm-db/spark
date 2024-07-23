@@ -431,7 +431,7 @@ case class TransformWithStateExec(
     OperatorStateMetadataV2(operatorInfo, stateStoreInfo, json)
   }
 
-  private def stateSchemaDirPath(): Path = {
+  def stateSchemaDirPath(): Path = {
     val storeName = StateStoreId.DEFAULT_STORE_NAME
     val stateCheckpointPath =
       new Path(getStateInfo.checkpointLocation,
