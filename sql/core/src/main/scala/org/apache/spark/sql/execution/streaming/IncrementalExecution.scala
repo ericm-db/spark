@@ -221,7 +221,17 @@ class IncrementalExecution(
             metadataWriter.write(metadata)
           case _ =>
         }
-        statefulOp
+        statefulOp match {
+          case tws: TransformWithStateExec =>
+            // create map of columnFamilyName -> columnFamilyId
+            val columnFamilySchemas = schemaValidationResult.head.newSchemas
+            val columnFamilyIds = columnFamilySchemas.map { case schema =>
+              schema.colFamilyName -> schema.colFamilyId
+            }.toMap
+            val stateInfo = tws.getStateInfo
+            tws.copy(stateInfo = Some(stateInfo.copy(columnFamilyIds = columnFamilyIds)))
+          case _ => statefulOp
+        }
     }
   }
 
@@ -499,12 +509,11 @@ class IncrementalExecution(
         checkOperatorValidWithMetadata(planWithStateOpId)
       }
 
-      // The rule below doesn't change the plan but can cause the side effect that
-      // metadata/schema is written in the checkpoint directory of stateful operator.
-      planWithStateOpId transform StateSchemaAndOperatorMetadataRule.rule
+      val planWithColFamilySchemas =
+        planWithStateOpId transform StateSchemaAndOperatorMetadataRule.rule
 
-      simulateWatermarkPropagation(planWithStateOpId)
-      planWithStateOpId transform WatermarkPropagationRule.rule
+      simulateWatermarkPropagation(planWithColFamilySchemas)
+      planWithColFamilySchemas transform WatermarkPropagationRule.rule
     }
   }
 

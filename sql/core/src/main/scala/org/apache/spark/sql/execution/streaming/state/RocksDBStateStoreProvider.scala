@@ -334,6 +334,7 @@ private[sql] class RocksDBStateStoreProvider
       valueSchema: StructType,
       keyStateEncoderSpec: KeyStateEncoderSpec,
       useColumnFamilies: Boolean,
+      columnFamilyIds: Map[String, Short],
       storeConf: StateStoreConf,
       hadoopConf: Configuration,
       useMultipleValuesPerKey: Boolean = false): Unit = {
@@ -352,7 +353,8 @@ private[sql] class RocksDBStateStoreProvider
     var defaultColFamilyId: Option[Short] = None
     if (useColumnFamilies) {
       // put default column family only if useColumnFamilies are enabled
-      colFamilyNameToIdMap.putIfAbsent(StateStore.DEFAULT_COL_FAMILY_NAME, colFamilyId.shortValue())
+      logError(s"### colFamilyIds: $columnFamilyIds")
+      colFamilyNameToIdMap.putAll(columnFamilyIds.asJava)
       defaultColFamilyId = Option(colFamilyId.shortValue())
     }
     keyValueEncoderMap.putIfAbsent(StateStore.DEFAULT_COL_FAMILY_NAME,
@@ -564,8 +566,8 @@ private[sql] class RocksDBStateStoreProvider
       if (!checkColFamilyExists(colFamilyName)) {
         val newColumnFamilyId = colFamilyId.incrementAndGet().toShort
         colFamilyNameToIdMap.putIfAbsent(colFamilyName, newColumnFamilyId)
-        Option(newColumnFamilyId)
-      } else None
+        Some(newColumnFamilyId)
+      } else Some(colFamilyNameToIdMap.get(colFamilyName))
     }
 
     /**

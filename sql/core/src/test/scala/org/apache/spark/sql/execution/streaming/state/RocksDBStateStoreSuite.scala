@@ -1267,6 +1267,7 @@ class RocksDBStateStoreSuite extends StateStoreSuiteBase[RocksDBStateStoreProvid
       valueSchema,
       keyStateEncoderSpec,
       useColumnFamilies,
+      Map.empty,
       new StateStoreConf(sqlConf.getOrElse(SQLConf.get)),
       conf,
       useMultipleValuesPerKey)

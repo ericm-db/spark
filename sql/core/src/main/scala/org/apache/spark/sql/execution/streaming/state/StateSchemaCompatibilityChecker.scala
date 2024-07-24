@@ -33,7 +33,8 @@ import org.apache.spark.sql.types.{DataType, StructType}
 // Result returned after validating the schema of the state store for schema changes
 case class StateSchemaValidationResult(
     evolvedSchema: Boolean,
-    schemaPath: String
+    schemaPath: String,
+    newSchemas: List[StateStoreColFamilySchema] = List.empty
 )
 
 // Used to represent the schema of a column family in the state store
@@ -171,13 +172,11 @@ class StateSchemaCompatibilityChecker(
       ignoreValueSchema: Boolean,
       stateSchemaVersion: Int): (Boolean, List[StateStoreColFamilySchema]) = {
     val existingStateSchemaList = getExistingKeyAndValueSchema().sortBy(_.colFamilyName)
-    val newStateSchemaList = newStateSchema.sortBy(_.colFamilyName)
-    // assign colFamilyIds based on position in list
-    newStateSchemaList.zipWithIndex.foreach {
+    val newStateSchemaList = newStateSchema.sortBy(_.colFamilyName).zipWithIndex.map {
       case (schema, index) =>
-        logError(s"### in assignment")
         schema.copy(colFamilyId = index.toShort)
     }
+    // assign colFamilyIds based on position in list
     var maxId: Short = existingStateSchemaList.map(_.colFamilyId).maxOption.getOrElse(-1)
 
     if (existingStateSchemaList.isEmpty) {
@@ -195,6 +194,12 @@ class StateSchemaCompatibilityChecker(
           } else {
             existingStateSchema
           }
+      }
+      // match on columnFamilyName
+      val newMap = newList.map(s => s.colFamilyName -> s).toMap
+      val existingMap = existingStateSchemaList.map(s => s.colFamilyName -> s).toMap
+      val newList = newStateSchemaList.map { s =>
+        existingMap.get(s.colFamilyName).getOrElse(newMap(s.colFamilyName))
       }
       (false, newList)
     }
@@ -290,6 +295,6 @@ object StateSchemaCompatibilityChecker {
       case Some(path) => path.toString
       case None => checker.schemaFileLocation.toString
     }
-    StateSchemaValidationResult(evolvedSchema, schemaFileLocation)
+    StateSchemaValidationResult(evolvedSchema, schemaFileLocation, evolvedSchemas)
   }
 }
