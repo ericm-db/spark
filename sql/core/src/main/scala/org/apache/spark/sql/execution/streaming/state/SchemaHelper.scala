@@ -181,6 +181,7 @@ object SchemaHelper {
         outputStream: FSDataOutputStream): Unit = {
       assert(stateStoreColFamilySchema.length == 1)
       val stateSchema = stateStoreColFamilySchema.head
+      outputStream.writeShort(stateSchema.colFamilyId)
       outputStream.writeUTF(stateSchema.keySchema.json)
       outputStream.writeUTF(stateSchema.valueSchema.json)
     }
@@ -194,7 +195,7 @@ object SchemaHelper {
         outputStream: FSDataOutputStream): Unit = {
       assert(stateStoreColFamilySchema.length == 1)
       val stateSchema = stateStoreColFamilySchema.head
-
+      outputStream.writeShort(stateSchema.colFamilyId)
       writeJsonSchema(outputStream, stateSchema.keySchema.json)
       writeJsonSchema(outputStream, stateSchema.valueSchema.json)
     }
@@ -212,6 +213,7 @@ object SchemaHelper {
       stateStoreColFamilySchema.foreach { colFamilySchema =>
         assert(colFamilySchema.keyStateEncoderSpec.isDefined)
         outputStream.writeUTF(colFamilySchema.colFamilyName)
+        outputStream.writeShort(colFamilySchema.colFamilyId)
         writeJsonSchema(outputStream, colFamilySchema.keySchema.json)
         writeJsonSchema(outputStream, colFamilySchema.valueSchema.json)
         writeJsonSchema(outputStream, colFamilySchema.keyStateEncoderSpec.get.json)

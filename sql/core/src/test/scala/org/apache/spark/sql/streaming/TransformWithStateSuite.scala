@@ -983,6 +983,40 @@ class TransformWithStateSuite extends StateStoreMetricsTest
       }
     }
   }
+
+  test("test that valid schema evolution changes column family id") {
+    withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
+      classOf[RocksDBStateStoreProvider].getName,
+      SQLConf.SHUFFLE_PARTITIONS.key ->
+        TransformWithStateSuiteUtils.NUM_SHUFFLE_PARTITIONS.toString) {
+      withTempDir { checkpointDir =>
+        val inputData = MemoryStream[String]
+        val result1 = inputData.toDS()
+          .groupByKey(x => x)
+          .transformWithState(new RunningCountStatefulProcessorInt(),
+            TimeMode.None(),
+            OutputMode.Update())
+
+        testStream(result1, OutputMode.Update())(
+          StartStream(checkpointLocation = checkpointDir.getCanonicalPath),
+          AddData(inputData, "a"),
+          CheckNewAnswer(("a", "1")),
+          StopStream
+        )
+        val result2 = inputData.toDS()
+          .groupByKey(x => x)
+          .transformWithState(new RunningCountStatefulProcessor(),
+            TimeMode.None(),
+            OutputMode.Update())
+        testStream(result2, OutputMode.Update())(
+          StartStream(checkpointLocation = checkpointDir.getCanonicalPath),
+          AddData(inputData, "a"),
+          CheckNewAnswer(("a", "2")),
+          StopStream
+        )
+      }
+    }
+  }
 }
 
 class TransformWithStateValidationSuite extends StateStoreMetricsTest {
