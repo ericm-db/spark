@@ -194,7 +194,7 @@ trait FlatMapGroupsWithStateExecBase
       batchId: Long,
       stateSchemaVersion: Int): List[StateSchemaValidationResult] = {
     val newStateSchema = List(StateStoreColFamilySchema(StateStore.DEFAULT_COL_FAMILY_NAME,
-      groupingAttributes.toStructType, stateManager.stateSchema))
+      groupingAttributes.toStructType, stateManager.stateSchema, None, None))
     List(StateSchemaCompatibilityChecker.validateAndMaybeEvolveStateSchema(getStateInfo, hadoopConf,
       newStateSchema, session.sessionState, stateSchemaVersion))
   }

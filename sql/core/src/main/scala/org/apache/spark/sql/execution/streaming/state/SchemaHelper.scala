@@ -67,11 +67,13 @@ object SchemaHelper {
     override def version: Int = 1
 
     override def read(inputStream: FSDataInputStream): List[StateStoreColFamilySchema] = {
+      val colFamilyId = inputStream.readShort()
       val keySchemaStr = inputStream.readUTF()
       val valueSchemaStr = inputStream.readUTF()
       List(StateStoreColFamilySchema(StateStore.DEFAULT_COL_FAMILY_NAME,
         StructType.fromString(keySchemaStr),
-        StructType.fromString(valueSchemaStr)))
+        StructType.fromString(valueSchemaStr),
+        colFamilyId = colFamilyId))
     }
   }
 
@@ -79,12 +81,14 @@ object SchemaHelper {
     override def version: Int = 2
 
     override def read(inputStream: FSDataInputStream): List[StateStoreColFamilySchema] = {
+      val colFamilyId = inputStream.readShort()
       val keySchemaStr = readJsonSchema(inputStream)
       val valueSchemaStr = readJsonSchema(inputStream)
 
       List(StateStoreColFamilySchema(StateStore.DEFAULT_COL_FAMILY_NAME,
         StructType.fromString(keySchemaStr),
-        StructType.fromString(valueSchemaStr)))
+        StructType.fromString(valueSchemaStr),
+        colFamilyId = colFamilyId))
     }
   }
 
@@ -97,6 +101,7 @@ object SchemaHelper {
       (0 until numEntries).map { _ =>
         // read the col family name and the key and value schema
         val colFamilyName = inputStream.readUTF()
+        val colFamilyId = inputStream.readShort()
         val keySchemaStr = readJsonSchema(inputStream)
         val valueSchemaStr = readJsonSchema(inputStream)
         val keySchema = StructType.fromString(keySchemaStr)
@@ -114,7 +119,8 @@ object SchemaHelper {
           keySchema,
           StructType.fromString(valueSchemaStr),
           Some(encoderSpec),
-          userKeyEncoderSchema)
+          userKeyEncoderSchema,
+          colFamilyId = colFamilyId)
       }.toList
     }
   }

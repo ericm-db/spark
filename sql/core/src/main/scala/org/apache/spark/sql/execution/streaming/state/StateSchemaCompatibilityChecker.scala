@@ -42,7 +42,8 @@ case class StateStoreColFamilySchema(
     keySchema: StructType,
     valueSchema: StructType,
     keyStateEncoderSpec: Option[KeyStateEncoderSpec] = None,
-    userKeyEncoderSchema: Option[StructType] = None
+    userKeyEncoderSchema: Option[StructType] = None,
+    colFamilyId: Short = 0
 )
 
 class StateSchemaCompatibilityChecker(
@@ -137,7 +138,7 @@ class StateSchemaCompatibilityChecker(
   private def check(
       oldSchema: StateStoreColFamilySchema,
       newSchema: StateStoreColFamilySchema,
-      ignoreValueSchema: Boolean) : Unit = {
+      ignoreValueSchema: Boolean) : Boolean = {
     val (storedKeySchema, storedValueSchema) = (oldSchema.keySchema,
       oldSchema.valueSchema)
     val (keySchema, valueSchema) = (newSchema.keySchema, newSchema.valueSchema)
@@ -145,6 +146,7 @@ class StateSchemaCompatibilityChecker(
     if (storedKeySchema.equals(keySchema) &&
       (ignoreValueSchema || storedValueSchema.equals(valueSchema))) {
       // schema is exactly same
+      false
     } else if (!schemasCompatible(storedKeySchema, keySchema)) {
       throw StateStoreErrors.stateStoreKeySchemaNotCompatible(storedKeySchema.toString,
         keySchema.toString)
@@ -153,6 +155,7 @@ class StateSchemaCompatibilityChecker(
         valueSchema.toString)
     } else {
       logInfo("Detected schema change which is compatible. Allowing to put rows.")
+      true
     }
   }
 
@@ -166,21 +169,34 @@ class StateSchemaCompatibilityChecker(
   def validateAndMaybeEvolveStateSchema(
       newStateSchema: List[StateStoreColFamilySchema],
       ignoreValueSchema: Boolean,
-      stateSchemaVersion: Int): Boolean = {
+      stateSchemaVersion: Int): (Boolean, List[StateStoreColFamilySchema]) = {
     val existingStateSchemaList = getExistingKeyAndValueSchema().sortBy(_.colFamilyName)
     val newStateSchemaList = newStateSchema.sortBy(_.colFamilyName)
+    // assign colFamilyIds based on position in list
+    newStateSchemaList.zipWithIndex.foreach {
+      case (schema, index) =>
+        logError(s"### in assignment")
+        schema.copy(colFamilyId = index.toShort)
+    }
+    var maxId: Short = existingStateSchemaList.map(_.colFamilyId).maxOption.getOrElse(-1)
 
     if (existingStateSchemaList.isEmpty) {
       // write the schema file if it doesn't exist
       createSchemaFile(newStateSchemaList, stateSchemaVersion)
-      true
+      (true, newStateSchemaList)
     } else {
       // validate if the new schema is compatible with the existing schema
-      existingStateSchemaList.lazyZip(newStateSchemaList).foreach {
+      val newList = existingStateSchemaList.lazyZip(newStateSchemaList).map {
         case (existingStateSchema, newStateSchema) =>
-          check(existingStateSchema, newStateSchema, ignoreValueSchema)
+          if (check(existingStateSchema, newStateSchema, ignoreValueSchema)) {
+            // increment maxId
+            maxId = (maxId + 1).toShort
+            newStateSchema.copy(colFamilyId = maxId)
+          } else {
+            existingStateSchema
+          }
       }
-      false
+      (false, newList)
     }
   }
 
@@ -254,16 +270,18 @@ object StateSchemaCompatibilityChecker {
     // there is no previous schema. So we classify that case under schema evolution. In the future,
     // newer stateSchemaVersions will support evolution through the lifetime of the query as well.
     var evolvedSchema = false
+    var evolvedSchemas: List[StateStoreColFamilySchema] = List.empty
     val result = Try(
       checker.validateAndMaybeEvolveStateSchema(newStateSchema,
         ignoreValueSchema = !storeConf.formatValidationCheckValue,
         stateSchemaVersion = stateSchemaVersion)
     ).toEither.fold(Some(_),
-      hasEvolvedSchema => {
+      result => {
+        val (hasEvolvedSchema, schemas) = result
         evolvedSchema = hasEvolvedSchema
+        evolvedSchemas = schemas
         None
       })
-
     // if schema validation is enabled and an exception is thrown, we re-throw it and fail the query
     if (storeConf.stateSchemaCheckEnabled && result.isDefined) {
       throw result.get
