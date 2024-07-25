@@ -211,6 +211,7 @@ class StatefulProcessorHandleImpl(
   override def deleteIfExists(stateName: String): Unit = {
     verifyStateVarOperations("delete_if_exists", CREATED)
     if (store.removeColFamilyIfExists(stateName)) {
+      logError(s"State variable $stateName was not deleted successfully")
       incrementMetric("numDeletedStateVars")
     }
   }

@@ -185,21 +185,19 @@ class StateSchemaCompatibilityChecker(
       (true, newStateSchemaList)
     } else {
       // validate if the new schema is compatible with the existing schema
-      val newList = existingStateSchemaList.lazyZip(newStateSchemaList).map {
-        case (existingStateSchema, newStateSchema) =>
-          if (check(existingStateSchema, newStateSchema, ignoreValueSchema)) {
-            // increment maxId
-            maxId = (maxId + 1).toShort
-            newStateSchema.copy(colFamilyId = maxId)
-          } else {
-            existingStateSchema
+      val newList = newStateSchemaList.map {
+        newSchema =>
+          existingStateSchemaList.find(_.colFamilyName == newSchema.colFamilyName) match {
+            case Some(oldSchema) =>
+              if (check(oldSchema, newSchema, ignoreValueSchema)) {
+                maxId = (maxId + 1).toShort
+                newSchema.copy(colFamilyId = maxId)
+              } else {
+                newSchema.copy(colFamilyId = oldSchema.colFamilyId)
+              }
+            case None =>
+              newSchema
           }
-      }
-      // match on columnFamilyName
-      val newMap = newList.map(s => s.colFamilyName -> s).toMap
-      val existingMap = existingStateSchemaList.map(s => s.colFamilyName -> s).toMap
-      val newList = newStateSchemaList.map { s =>
-        existingMap.get(s.colFamilyName).getOrElse(newMap(s.colFamilyName))
       }
       (false, newList)
     }
