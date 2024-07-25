@@ -64,10 +64,12 @@ private[sql] class RocksDBStateStoreProvider
         useMultipleValuesPerKey: Boolean = false,
         isInternal: Boolean = false): Unit = {
       val newColFamilyId = ColumnFamilyUtils.createColFamilyIfAbsent(colFamilyName, isInternal)
-
+      logError(s"### Putting colFamilyName: $colFamilyName with id $newColFamilyId")
+      logError(s"### Before keyValueEncoderMapKeys: ${keyValueEncoderMap.keySet()}")
       keyValueEncoderMap.putIfAbsent(colFamilyName,
         (RocksDBStateEncoder.getKeyEncoder(keyStateEncoderSpec, useColumnFamilies, newColFamilyId),
          RocksDBStateEncoder.getValueEncoder(valueSchema, useMultipleValuesPerKey)))
+      logError(s"### After keyValueEncoderMapKeys: ${keyValueEncoderMap.keySet()}")
     }
 
     override def get(key: UnsafeRow, colFamilyName: String): UnsafeRow = {
@@ -313,7 +315,8 @@ private[sql] class RocksDBStateStoreProvider
 
       val result = {
         val colFamilyExists = ColumnFamilyUtils.removeColFamilyIfExists(colFamilyName)
-
+        logError(s"### In remove, keyValueEncoderMapKeys: ${keyValueEncoderMap.keySet()}")
+        logError(s"### Trying to remove $colFamilyName")
         if (colFamilyExists) {
           val colFamilyIdBytes =
             keyValueEncoderMap.get(colFamilyName)._1.getColumnFamilyIdBytes()
@@ -356,6 +359,13 @@ private[sql] class RocksDBStateStoreProvider
       logError(s"### colFamilyIds: $columnFamilyIds")
       colFamilyNameToIdMap.putAll(columnFamilyIds.asJava)
       defaultColFamilyId = Option(colFamilyId.shortValue())
+      columnFamilyIds.filter(_ != null).map { case (colFamilyName, colFamilyId) =>
+        logError(s"### Putting colFamilyName: $colFamilyName with id $colFamilyId")
+        keyValueEncoderMap.putIfAbsent(colFamilyName,
+          (RocksDBStateEncoder.getKeyEncoder(keyStateEncoderSpec, useColumnFamilies,
+            Some(colFamilyId)), RocksDBStateEncoder.getValueEncoder(valueSchema,
+            useMultipleValuesPerKey)))
+      }
     }
     keyValueEncoderMap.putIfAbsent(StateStore.DEFAULT_COL_FAMILY_NAME,
       (RocksDBStateEncoder.getKeyEncoder(keyStateEncoderSpec,
