@@ -32,7 +32,7 @@ import org.apache.spark.sql.connector.read.{Batch, InputPartition, PartitionRead
 import org.apache.spark.sql.execution.datasources.v2.state.StateDataSourceErrors
 import org.apache.spark.sql.execution.datasources.v2.state.StateSourceOptions.PATH
 import org.apache.spark.sql.execution.streaming.CheckpointFileManager
-import org.apache.spark.sql.execution.streaming.state.{OperatorStateMetadata, OperatorStateMetadataReader, OperatorStateMetadataV1, OperatorStateMetadataV2}
+import org.apache.spark.sql.execution.streaming.state.{OperatorInfoV1, OperatorStateMetadata, OperatorStateMetadataReader, OperatorStateMetadataV1, OperatorStateMetadataV2, StateStoreMetadataV1}
 import org.apache.spark.sql.sources.DataSourceRegister
 import org.apache.spark.sql.types.{DataType, IntegerType, LongType, StringType, StructType}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
@@ -191,11 +191,12 @@ class StateMetadataPartitionReader(
     } else Array.empty
   }
 
+  // Need this to be accessible from IncrementalExecution for the planning rule.
   private[sql] def allOperatorStateMetadata: Array[OperatorStateMetadata] = {
     val stateDir = new Path(checkpointLocation, "state")
     val opIds = fileManager
       .list(stateDir, pathNameCanBeParsedAsLongFilter).map(f => pathToLong(f.getPath)).sorted
-    opIds.flatMap { opId =>
+    opIds.map { opId =>
       val operatorIdPath = new Path(stateDir, opId.toString)
       // check if OperatorStateMetadataV2 path exists, if it does, read it
       // otherwise, fall back to OperatorStateMetadataV1
@@ -206,7 +207,11 @@ class StateMetadataPartitionReader(
         1
       }
       OperatorStateMetadataReader.createReader(
-        operatorIdPath, hadoopConf, operatorStateMetadataVersion).read()
+        operatorIdPath, hadoopConf, operatorStateMetadataVersion).read() match {
+        case Some(metadata) => metadata
+        case None => OperatorStateMetadataV1(OperatorInfoV1(opId, null),
+          Array(StateStoreMetadataV1(null, -1, -1)))
+      }
     }
   }
 
@@ -222,7 +227,7 @@ class StateMetadataPartitionReader(
               stateStoreMetadata.numPartitions,
               if (batchIds.nonEmpty) batchIds.head else -1,
               if (batchIds.nonEmpty) batchIds.last else -1,
-              "",
+              null,
               stateStoreMetadata.numColsPrefixKey
             )
           }
