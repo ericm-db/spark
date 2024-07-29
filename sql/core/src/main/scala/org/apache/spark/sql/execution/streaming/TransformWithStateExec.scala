@@ -488,6 +488,7 @@ case class TransformWithStateExec(
               NoPrefixKeyStateEncoderSpec(keyEncoder.schema),
               version = stateInfo.get.storeVersion,
               useColumnFamilies = true,
+              columnFamilyIds = getStateInfo.columnFamilyIds,
               storeConf = storeConf,
               hadoopConf = hadoopConfBroadcast.value.value
             )
@@ -508,7 +509,8 @@ case class TransformWithStateExec(
           NoPrefixKeyStateEncoderSpec(keyEncoder.schema),
           session.sessionState,
           Some(session.streams.stateStoreCoordinator),
-          useColumnFamilies = true
+          useColumnFamilies = true,
+          columnFamilyIds = getStateInfo.columnFamilyIds
         ) {
           case (store: StateStore, singleIterator: Iterator[InternalRow]) =>
             processData(store, singleIterator)
@@ -559,7 +561,8 @@ case class TransformWithStateExec(
       useColumnFamilies = true,
       storeConf = storeConf,
       hadoopConf = hadoopConfBroadcast.value.value,
-      useMultipleValuesPerKey = true)
+      useMultipleValuesPerKey = true,
+      columnFamilyIds = Map.empty)
 
     val store = stateStoreProvider.getStore(0)
     val outputIterator = f(store)

@@ -322,6 +322,7 @@ private[sql] class HDFSBackedStateStoreProvider extends StateStoreProvider with 
       valueSchema: StructType,
       keyStateEncoderSpec: KeyStateEncoderSpec,
       useColumnFamilies: Boolean,
+      columnFamilyIds: Map[String, Short],
       storeConf: StateStoreConf,
       hadoopConf: Configuration,
       useMultipleValuesPerKey: Boolean = false): Unit = {
