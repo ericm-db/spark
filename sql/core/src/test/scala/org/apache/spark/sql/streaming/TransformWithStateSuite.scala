@@ -902,7 +902,7 @@ class TransformWithStateSuite extends StateStoreMetricsTest
           new StructType().add("value", LongType, false),
           Some(NoPrefixKeyStateEncoderSpec(keySchema)),
           None,
-          0.toShort
+          1.toShort
         )
         val schema1 = StateStoreColFamilySchema(
           "listState",
@@ -912,7 +912,7 @@ class TransformWithStateSuite extends StateStoreMetricsTest
               .add("name", StringType),
           Some(NoPrefixKeyStateEncoderSpec(keySchema)),
           None,
-          1.toShort
+          2.toShort
         )
 
         val userKeySchema = new StructType()
@@ -927,7 +927,7 @@ class TransformWithStateSuite extends StateStoreMetricsTest
           new StructType().add("value", StringType),
           Some(PrefixKeyScanStateEncoderSpec(compositeKeySchema, 1)),
           Option(userKeySchema),
-          2.toShort
+          3.toShort
         )
 
         val inputData = MemoryStream[String]
