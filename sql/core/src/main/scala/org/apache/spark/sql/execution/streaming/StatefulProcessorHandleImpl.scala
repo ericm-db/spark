@@ -399,6 +399,8 @@ class DriverStatefulProcessorHandleImpl(
       getValueStateSchema(stateName, keyExprEnc, valEncoder, true)
     checkIfDuplicateVariableDefined(stateName)
     columnFamilySchemas.put(stateName, colFamilySchema)
+    val ttlColFamilySchema = schemaUtils.getTtlStateSchema("$ttl_" + stateName, keyExprEnc)
+    columnFamilySchemas.put("$ttl_" + stateName, ttlColFamilySchema)
     val stateVariableInfo = TransformWithStateVariableUtils.
       getValueState(stateName, ttlEnabled = true)
     stateVariableInfos.put(stateName, stateVariableInfo)
@@ -426,6 +428,8 @@ class DriverStatefulProcessorHandleImpl(
       getListStateSchema(stateName, keyExprEnc, valEncoder, true)
     checkIfDuplicateVariableDefined(stateName)
     columnFamilySchemas.put(stateName, colFamilySchema)
+    val ttlColFamilySchema = schemaUtils.getTtlStateSchema("$ttl_" + stateName, keyExprEnc)
+    columnFamilySchemas.put("$ttl_" + stateName, ttlColFamilySchema)
     val stateVariableInfo = TransformWithStateVariableUtils.
       getListState(stateName, ttlEnabled = true)
     stateVariableInfos.put(stateName, stateVariableInfo)

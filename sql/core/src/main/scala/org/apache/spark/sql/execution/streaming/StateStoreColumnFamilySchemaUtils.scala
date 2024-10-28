@@ -20,9 +20,8 @@ import org.apache.spark.sql.Encoder
 import org.apache.spark.sql.avro.{AvroDeserializer, AvroOptions, AvroSerializer, SchemaConverters}
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchemaUtils._
-import org.apache.spark.sql.execution.streaming.state.{NoPrefixKeyStateEncoderSpec, PrefixKeyScanStateEncoderSpec, StateStoreColFamilySchema}
-import org.apache.spark.sql.execution.streaming.state.AvroEncoderSpec
-import org.apache.spark.sql.types.StructType
+import org.apache.spark.sql.execution.streaming.state.{AvroEncoderSpec, NoPrefixKeyStateEncoderSpec, PrefixKeyScanStateEncoderSpec, RangeKeyScanStateEncoderSpec, StateStoreColFamilySchema}
+import org.apache.spark.sql.types.{NullType, StructField, StructType}
 
 object StateStoreColumnFamilySchemaUtils {
 
@@ -59,6 +58,33 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) {
     } else {
       None
     }
+  }
+
+  def getTtlStateSchema[T](
+      stateName: String,
+      keyEncoder: ExpressionEncoder[Any]): StateStoreColFamilySchema = {
+    val ttlKeySchema = getSingleKeyTTLRowSchema(keyEncoder.schema)
+    val ttlValSchema = StructType(Array(StructField("__dummy__", NullType)))
+    StateStoreColFamilySchema(
+      stateName,
+      ttlKeySchema,
+      ttlValSchema,
+      Some(RangeKeyScanStateEncoderSpec(ttlKeySchema, Seq(0))),
+      avroEnc = getAvroSerde(keyEncoder.schema, ttlValSchema))
+  }
+
+  def getTtlStateSchema[T](
+      stateName: String,
+      keyEncoder: ExpressionEncoder[Any],
+      userKeyEncoder: ExpressionEncoder[Any]): StateStoreColFamilySchema = {
+    val ttlKeySchema = getCompositeKeyTTLRowSchema(keyEncoder.schema, userKeyEncoder.schema)
+    val ttlValSchema = StructType(Array(StructField("__dummy__", NullType)))
+    StateStoreColFamilySchema(
+      stateName,
+      ttlKeySchema,
+      ttlValSchema,
+      Some(RangeKeyScanStateEncoderSpec(ttlKeySchema, Seq(0))),
+      avroEnc = getAvroSerde(keyEncoder.schema, ttlValSchema))
   }
 
   def getValueStateSchema[T](

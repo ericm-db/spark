@@ -42,7 +42,7 @@ class MapStateImpl[K, V](
     keyExprEnc: ExpressionEncoder[Any],
     userKeyEnc: Encoder[K],
     valEncoder: Encoder[V],
-    avroSerde: Option[AvroEncoderSpec],
+    avroEnc: Option[AvroEncoderSpec],
     metrics: Map[String, SQLMetric] = Map.empty) extends MapState[K, V] with Logging {
 
   // Pack grouping key and user key together as a prefixed composite key
@@ -53,9 +53,9 @@ class MapStateImpl[K, V](
 
   // If we are using Avro, the avroSerde parameter must be populated
   // else, we will default to using UnsafeRow.
-  private val usingAvro: Boolean = avroSerde.isDefined
+  private val usingAvro: Boolean = avroEnc.isDefined
   private val avroTypesEncoder = new CompositeKeyAvroRowEncoder(
-    keyExprEnc, userKeyEnc, valEncoder, stateName, hasTtl = false, avroSerde)
+    keyExprEnc, userKeyEnc, valEncoder, stateName, hasTtl = false, avroEnc)
   private val unsafeRowTypesEncoder = new CompositeKeyUnsafeRowEncoder(
     keyExprEnc, userKeyEnc, valEncoder, stateName, hasTtl = false)
 

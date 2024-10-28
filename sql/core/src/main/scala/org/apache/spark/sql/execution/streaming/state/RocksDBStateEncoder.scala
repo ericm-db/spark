@@ -729,15 +729,342 @@ class RangeKeyScanStateEncoder(
 
   override def supportPrefixKeyScan: Boolean = true
 
+  override def encodePrefixKeyBytes(prefixKeyBytes: Array[Byte]): Array[Byte] = {
+    // For range scan prefix key, we need to transform the bytes to maintain ordering
+    // This requires parsing each field according to its type and applying the range-scan encoding
 
-  override def encodePrefixKeyBytes(prefixKey: Array[Byte]): Array[Byte] =
-    throw new UnsupportedOperationException
+    var pos = 0
+    var totalSize = 0
 
-  override def encodeKeyBytes(row: Array[Byte]): Array[Byte] =
-    throw new UnsupportedOperationException
+    // Calculate total size needed - each field needs marker byte + field size
+    rangeScanKeyFieldsWithOrdinal.foreach { case (field, _) =>
+      totalSize += 1 // marker byte
+      val fieldSize = field.dataType match {
+        case BooleanType | ByteType => 1
+        case ShortType => 2
+        case IntegerType | FloatType => 4
+        case LongType | DoubleType => 8
+        case _ => throw new IllegalArgumentException(s"Unsupported type ${field.dataType}")
+      }
+      totalSize += fieldSize
+    }
 
-  override def decodeKeyBytes(keyBytes: Array[Byte]): Array[Byte] =
-    throw new UnsupportedOperationException
+    // Create byte array for the encoded fields
+    val encodedFields = new Array[Byte](totalSize)
+    var encodedPos = 0
+
+    // Process each field
+    rangeScanKeyFieldsWithOrdinal.foreach { case (field, _) =>
+      val valueSize = field.dataType match {
+        case BooleanType | ByteType => 1
+        case ShortType => 2
+        case IntegerType | FloatType => 4
+        case LongType | DoubleType => 8
+      }
+
+      // Check if we have enough bytes left to read the value
+      if (pos + valueSize > prefixKeyBytes.length) {
+        throw new IllegalArgumentException(s"Not enough bytes to read ${field.dataType}")
+      }
+
+      // Create buffer for reading the value in native byte order
+      val bbuf = ByteBuffer.wrap(prefixKeyBytes, pos, valueSize)
+      val bbufBE = ByteBuffer.allocate(valueSize)
+      bbufBE.order(ByteOrder.BIG_ENDIAN)
+
+      field.dataType match {
+        case ByteType =>
+          val value = bbuf.get()
+          encodedFields(encodedPos) = if (value == 0) {
+            0x02.toByte // null marker
+          } else if (value < 0) {
+            0x00.toByte // negative marker
+          } else {
+            0x01.toByte // positive marker
+          }
+          encodedPos += 1
+          bbufBE.put(value)
+          bbufBE.flip()
+          bbufBE.get(encodedFields, encodedPos, valueSize)
+
+        case ShortType =>
+          val value = bbuf.getShort()
+          encodedFields(encodedPos) = if (value == 0) {
+            0x02.toByte
+          } else if (value < 0) {
+            0x00.toByte
+          } else {
+            0x01.toByte
+          }
+          encodedPos += 1
+          bbufBE.putShort(value)
+          bbufBE.flip()
+          bbufBE.get(encodedFields, encodedPos, valueSize)
+
+        case IntegerType =>
+          val value = bbuf.getInt()
+          encodedFields(encodedPos) = if (value == 0) {
+            0x02.toByte
+          } else if (value < 0) {
+            0x00.toByte
+          } else {
+            0x01.toByte
+          }
+          encodedPos += 1
+          bbufBE.putInt(value)
+          bbufBE.flip()
+          bbufBE.get(encodedFields, encodedPos, valueSize)
+
+        case LongType =>
+          val value = bbuf.getLong()
+          encodedFields(encodedPos) = if (value == 0) {
+            0x02.toByte
+          } else if (value < 0) {
+            0x00.toByte
+          } else {
+            0x01.toByte
+          }
+          encodedPos += 1
+          bbufBE.putLong(value)
+          bbufBE.flip()
+          bbufBE.get(encodedFields, encodedPos, valueSize)
+
+        case FloatType =>
+          val value = bbuf.getFloat()
+          val bits = java.lang.Float.floatToRawIntBits(value)
+          encodedFields(encodedPos) = if (bits == 0) {
+            0x02.toByte
+          } else if ((bits & floatSignBitMask) != 0) {
+            // Negative float - need to flip bits for correct ordering
+            0x00.toByte
+          } else {
+            0x01.toByte
+          }
+          encodedPos += 1
+          val floatToWrite = if ((bits & floatSignBitMask) != 0) {
+            java.lang.Float.intBitsToFloat(bits ^ floatFlipBitMask)
+          } else value
+          bbufBE.putFloat(floatToWrite)
+          bbufBE.flip()
+          bbufBE.get(encodedFields, encodedPos, valueSize)
+
+        case DoubleType =>
+          val value = bbuf.getDouble()
+          val bits = java.lang.Double.doubleToRawLongBits(value)
+          encodedFields(encodedPos) = if (bits == 0) {
+            0x02.toByte
+          } else if ((bits & doubleSignBitMask) != 0) {
+            // Negative double - need to flip bits for correct ordering
+            0x00.toByte
+          } else {
+            0x01.toByte
+          }
+          encodedPos += 1
+          val doubleToWrite = if ((bits & doubleSignBitMask) != 0) {
+            java.lang.Double.longBitsToDouble(bits ^ doubleFlipBitMask)
+          } else value
+          bbufBE.putDouble(doubleToWrite)
+          bbufBE.flip()
+          bbufBE.get(encodedFields, encodedPos, valueSize)
+      }
+
+      encodedPos += valueSize
+      pos += valueSize
+    }
+
+    // Now wrap these encoded fields with version and column family prefix if needed
+    val (result, startingOffset) = encodeColumnFamilyPrefix(encodedFields.length + 4)
+    Platform.putInt(result, startingOffset, encodedFields.length)
+    Platform.copyMemory(encodedFields, Platform.BYTE_ARRAY_OFFSET,
+      result, startingOffset + 4, encodedFields.length)
+
+    result
+  }
+
+  override def encodeKeyBytes(keyBytes: Array[Byte]): Array[Byte] = {
+    // For full key encoding, we need to:
+    // 1. Split the input bytes into range scan fields and remaining fields
+    // 2. Encode the range scan fields using the same logic as encodePrefixKeyBytes
+    // 3. Append the remaining fields
+    // 4. Add column family prefix if needed
+
+    var pos = 0
+    var totalSize = 0
+
+    // Calculate size needed for range scan fields
+    rangeScanKeyFieldsWithOrdinal.foreach { case (field, _) =>
+      totalSize += 1 // marker byte
+      val fieldSize = field.dataType match {
+        case BooleanType | ByteType => 1
+        case ShortType => 2
+        case IntegerType | FloatType => 4
+        case LongType | DoubleType => 8
+        case _ => throw new IllegalArgumentException(s"Unsupported type ${field.dataType}")
+      }
+      totalSize += fieldSize
+    }
+
+    // Create array for range scan encoded fields
+    val encodedRangeFields = new Array[Byte](totalSize)
+    var encodedPos = 0
+
+    // Encode range scan fields
+    rangeScanKeyFieldsWithOrdinal.foreach { case (field, _) =>
+      val valueSize = field.dataType match {
+        case BooleanType | ByteType => 1
+        case ShortType => 2
+        case IntegerType | FloatType => 4
+        case LongType | DoubleType => 8
+      }
+
+      if (pos + valueSize > keyBytes.length) {
+        throw new IllegalArgumentException(s"Not enough bytes to read ${field.dataType}")
+      }
+
+      val bbuf = ByteBuffer.wrap(keyBytes, pos, valueSize)
+      val bbufBE = ByteBuffer.allocate(valueSize)
+      bbufBE.order(ByteOrder.BIG_ENDIAN)
+
+      field.dataType match {
+        case ByteType =>
+          val value = bbuf.get()
+          encodedRangeFields(encodedPos) = if (value == 0) {
+            0x02.toByte
+          } else if (value < 0) {
+            0x00.toByte
+          } else {
+            0x01.toByte
+          }
+          encodedPos += 1
+          bbufBE.put(value)
+          bbufBE.flip()
+          bbufBE.get(encodedRangeFields, encodedPos, valueSize)
+
+        case ShortType =>
+          val value = bbuf.getShort()
+          encodedRangeFields(encodedPos) = if (value == 0) {
+            0x02.toByte
+          } else if (value < 0) {
+            0x00.toByte
+          } else {
+            0x01.toByte
+          }
+          encodedPos += 1
+          bbufBE.putShort(value)
+          bbufBE.flip()
+          bbufBE.get(encodedRangeFields, encodedPos, valueSize)
+
+        case IntegerType =>
+          val value = bbuf.getInt()
+          encodedRangeFields(encodedPos) = if (value == 0) {
+            0x02.toByte
+          } else if (value < 0) {
+            0x00.toByte
+          } else {
+            0x01.toByte
+          }
+          encodedPos += 1
+          bbufBE.putInt(value)
+          bbufBE.flip()
+          bbufBE.get(encodedRangeFields, encodedPos, valueSize)
+
+        case LongType =>
+          val value = bbuf.getLong()
+          encodedRangeFields(encodedPos) = if (value == 0) {
+            0x02.toByte
+          } else if (value < 0) {
+            0x00.toByte
+          } else {
+            0x01.toByte
+          }
+          encodedPos += 1
+          bbufBE.putLong(value)
+          bbufBE.flip()
+          bbufBE.get(encodedRangeFields, encodedPos, valueSize)
+
+        case FloatType =>
+          val value = bbuf.getFloat()
+          val bits = java.lang.Float.floatToRawIntBits(value)
+          encodedRangeFields(encodedPos) = if (bits == 0) {
+            0x02.toByte
+          } else if ((bits & floatSignBitMask) != 0) {
+            0x00.toByte
+          } else {
+            0x01.toByte
+          }
+          encodedPos += 1
+          val floatToWrite = if ((bits & floatSignBitMask) != 0) {
+            java.lang.Float.intBitsToFloat(bits ^ floatFlipBitMask)
+          } else value
+          bbufBE.putFloat(floatToWrite)
+          bbufBE.flip()
+          bbufBE.get(encodedRangeFields, encodedPos, valueSize)
+
+        case DoubleType =>
+          val value = bbuf.getDouble()
+          val bits = java.lang.Double.doubleToRawLongBits(value)
+          encodedRangeFields(encodedPos) = if (bits == 0) {
+            0x02.toByte
+          } else if ((bits & doubleSignBitMask) != 0) {
+            0x00.toByte
+          } else {
+            0x01.toByte
+          }
+          encodedPos += 1
+          val doubleToWrite = if ((bits & doubleSignBitMask) != 0) {
+            java.lang.Double.longBitsToDouble(bits ^ doubleFlipBitMask)
+          } else value
+          bbufBE.putDouble(doubleToWrite)
+          bbufBE.flip()
+          bbufBE.get(encodedRangeFields, encodedPos, valueSize)
+      }
+
+      encodedPos += valueSize
+      pos += valueSize
+    }
+
+    // Get remaining bytes
+    val remainingBytes = if (pos < keyBytes.length) {
+      val remaining = new Array[Byte](keyBytes.length - pos)
+      Platform.copyMemory(keyBytes, Platform.BYTE_ARRAY_OFFSET + pos,
+        remaining, Platform.BYTE_ARRAY_OFFSET, remaining.length)
+      remaining
+    } else Array.empty[Byte]
+
+    // Create final result with version and column family prefix if needed
+    val (result, startingOffset) = encodeColumnFamilyPrefix(
+      4 + encodedRangeFields.length + remainingBytes.length)
+
+    Platform.putInt(result, startingOffset, encodedRangeFields.length)
+    Platform.copyMemory(encodedRangeFields, Platform.BYTE_ARRAY_OFFSET,
+      result, startingOffset + 4, encodedRangeFields.length)
+
+    if (remainingBytes.nonEmpty) {
+      Platform.copyMemory(remainingBytes, Platform.BYTE_ARRAY_OFFSET,
+        result, startingOffset + 4 + encodedRangeFields.length, remainingBytes.length)
+    }
+
+    result
+  }
+
+  override def decodeKeyBytes(keyBytes: Array[Byte]): Array[Byte] = {
+    if (keyBytes == null) return null
+
+    // Skip column family prefix if present
+    val startOffset = decodeKeyStartOffset
+
+    // Read prefix length
+    val prefixLen = Platform.getInt(keyBytes, startOffset)
+
+    // Total length of data we want to return
+    val totalLen = keyBytes.length - 4 - offsetForColFamilyPrefix
+
+    val result = new Array[Byte](totalLen)
+    Platform.copyMemory(keyBytes, startOffset + 4,
+      result, Platform.BYTE_ARRAY_OFFSET, totalLen)
+
+    result
+  }
 }
 
 /**

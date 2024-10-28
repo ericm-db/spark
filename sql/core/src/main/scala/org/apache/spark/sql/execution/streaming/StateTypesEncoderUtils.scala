@@ -436,14 +436,33 @@ class CompositeKeyAvroRowEncoder[K, V](
 
 /** Class for TTL with single key serialization */
 class SingleKeyTTLEncoder(
-    keyExprEnc: ExpressionEncoder[Any]) {
+    keyExprEnc: ExpressionEncoder[Any],
+    avroEncoderSpec: Option[AvroEncoderSpec] = None) {
 
+  private lazy val out = new ByteArrayOutputStream
   private val ttlKeyProjection = UnsafeProjection.create(
     getSingleKeyTTLRowSchema(keyExprEnc.schema))
+
+  private val ttlKeyType = SchemaConverters.toAvroType(keyExprEnc.schema)
 
   def encodeTTLRow(expirationMs: Long, groupingKey: UnsafeRow): UnsafeRow = {
     ttlKeyProjection.apply(
       InternalRow(expirationMs, groupingKey.asInstanceOf[InternalRow]))
+  }
+
+  def encodeTTLRow(expirationMs: Long, groupingKey: Array[Byte]): Array[Byte] = {
+    val objRow: InternalRow = InternalRow(expirationMs, groupingKey.asInstanceOf[InternalRow])
+    val avroData =
+      avroEncoderSpec.get.valueSerializer.serialize(objRow) // InternalRow -> GenericDataRecord
+    out.reset()
+
+    val encoder = EncoderFactory.get().directBinaryEncoder(out, null)
+    val writer = new GenericDatumWriter[Any](
+      ttlKeyType) // Defining Avro writer for this struct type
+
+    writer.write(avroData, encoder) // GenericDataRecord -> bytes
+    encoder.flush()
+    out.toByteArray
   }
 }
 

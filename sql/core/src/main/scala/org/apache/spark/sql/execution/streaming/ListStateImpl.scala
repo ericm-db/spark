@@ -212,9 +212,9 @@ class ListStateImpl[S](
     if (usingAvro) {
       val encodedKey: Array[Byte] = avroTypesEncoder.encodeGroupingKey()
       store.remove(encodedKey, stateName)
-       val entryCount = getEntryCount(encodedKey)
-       TWSMetricsUtils.incrementMetric(metrics, "numRemovedStateRows", entryCount)
-       removeEntryCount(encodedKey)
+//       val entryCount = getEntryCount(encodedKey)
+//       TWSMetricsUtils.incrementMetric(metrics, "numRemovedStateRows", entryCount)
+//       removeEntryCount(encodedKey)
     } else {
       val encodedKey = unsafeRowTypesEncoder.encodeGroupingKey()
       store.remove(encodedKey, stateName)

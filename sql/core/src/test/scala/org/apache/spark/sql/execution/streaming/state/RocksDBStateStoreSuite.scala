@@ -821,6 +821,48 @@ class RocksDBStateStoreSuite extends StateStoreSuiteBase[RocksDBStateStoreProvid
     }
   }
 
+  testWithColumnFamilies("rocksdb range scan - ordering cols and key schema cols are same",
+    TestWithBothChangelogCheckpointingEnabledAndDisabled) { colFamiliesEnabled =>
+
+    // use the same schema as value schema for single col key schema
+    tryWithProviderResource(newStoreProvider(valueSchema,
+      RangeKeyScanStateEncoderSpec(valueSchema, Seq(0)), colFamiliesEnabled)) { provider =>
+      val store = provider.getStore(0)
+      val cfName = if (colFamiliesEnabled) "testColFamily" else "default"
+      if (colFamiliesEnabled) {
+        store.createColFamilyIfAbsent(cfName,
+          valueSchema, valueSchema,
+          RangeKeyScanStateEncoderSpec(valueSchema, Seq(0)))
+      }
+
+      val timerTimestamps = Seq(931, 8000, 452300, 4200,
+        -3545, -343, 133, -90, -8014490, -79247,
+        90, 1, 2, 8, 3, 35, 6, 9, 5, -233)
+      timerTimestamps.foreach { ts =>
+        // non-timestamp col is of variable size
+        val keyRow = dataToValueRow(ts)
+        val valueRow = dataToValueRow(1)
+        store.put(keyRow, valueRow, cfName)
+        assert(valueRowToData(store.get(keyRow, cfName)) === 1)
+      }
+
+      val result = store.iterator(cfName).map { kv =>
+        valueRowToData(kv.key)
+      }.toSeq
+      assert(result === timerTimestamps.sorted)
+
+      // also check for prefix scan
+      timerTimestamps.foreach { ts =>
+        val prefix = dataToValueRow(ts)
+        val result = store.prefixScan(prefix, cfName).map { kv =>
+          assert(valueRowToData(kv.value) === 1)
+          valueRowToData(kv.key)
+        }.toSeq
+        assert(result.size === 1)
+      }
+    }
+  }
+
   testWithColumnFamilies("rocksdb range scan - with prefix scan",
     TestWithBothChangelogCheckpointingEnabledAndDisabled) { colFamiliesEnabled =>
 
