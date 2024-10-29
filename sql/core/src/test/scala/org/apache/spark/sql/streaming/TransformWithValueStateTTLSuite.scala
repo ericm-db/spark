@@ -184,7 +184,8 @@ class TTLProcessorWithCompositeTypes(
   }
 }
 
-class TransformWithValueStateTTLSuite extends TransformWithStateTTLTest {
+class TransformWithValueStateTTLSuite
+  extends TransformWithStateTTLTest with AlsoTestWithChangelogCheckpointingEnabled {
 
   import testImplicits._
 
@@ -195,7 +196,7 @@ class TransformWithValueStateTTLSuite extends TransformWithStateTTLTest {
 
   override def getStateTTLMetricName: String = "numValueStateWithTTLVars"
 
-  test("validate multiple value states") {
+  testWithAvroEncoding("validate multiple value states") {
     withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
       classOf[RocksDBStateStoreProvider].getName) {
       val ttlKey = "k1"

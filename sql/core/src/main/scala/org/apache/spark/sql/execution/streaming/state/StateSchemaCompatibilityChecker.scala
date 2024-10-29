@@ -40,6 +40,7 @@ case class StateSchemaValidationResult(
 
 case class AvroEncoderSpec(
   keySerializer: AvroSerializer,
+  keyDeserializer: AvroDeserializer,
   valueSerializer: AvroSerializer,
   valueDeserializer: AvroDeserializer,
   compositeKeySerializer: Option[AvroSerializer] = None,

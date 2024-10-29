@@ -18,12 +18,17 @@ package org.apache.spark.sql.execution.streaming
 
 import java.time.Duration
 
+import org.apache.avro.generic.GenericDatumReader
+import org.apache.avro.io.DecoderFactory
+
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql.Encoder
+import org.apache.spark.sql.avro.SchemaConverters
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.catalyst.expressions.{UnsafeProjection, UnsafeRow}
 import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchemaUtils._
-import org.apache.spark.sql.execution.streaming.state.{RangeKeyScanStateEncoderSpec, StateStore}
+import org.apache.spark.sql.execution.streaming.state.{AvroEncoderSpec, RangeKeyScanStateEncoderSpec, StateStore}
 import org.apache.spark.sql.types._
 
 object StateTTLSchema {
@@ -39,6 +44,10 @@ object StateTTLSchema {
  */
 case class SingleKeyTTLRow(
     groupingKey: UnsafeRow,
+    expirationMs: Long)
+
+case class SingleKeyByteArrayTTLRow(
+    groupingKey: Array[Byte],
     expirationMs: Long)
 
 /**
@@ -80,14 +89,21 @@ abstract class SingleKeyTTLStateImpl(
     stateName: String,
     store: StateStore,
     keyExprEnc: ExpressionEncoder[Any],
-    ttlExpirationMs: Long)
-  extends TTLState {
+    ttlExpirationMs: Long,
+    avroEnc: Option[AvroEncoderSpec])
+  extends TTLState with Logging {
 
   import org.apache.spark.sql.execution.streaming.StateTTLSchema._
 
+  private val usingAvro: Boolean = avroEnc.isDefined
   private val ttlColumnFamilyName = "$ttl_" + stateName
-  private val keySchema = getSingleKeyTTLRowSchema(keyExprEnc.schema)
-  private val keyTTLRowEncoder = new SingleKeyTTLEncoder(keyExprEnc)
+  private val keySchema = if (usingAvro) {
+    getSingleKeyTTLAvroRowSchema
+  } else {
+    getSingleKeyTTLRowSchema(keyExprEnc.schema)
+  }
+  private val keyAvroType = SchemaConverters.toAvroType(keySchema)
+  private val keyTTLRowEncoder = new SingleKeyTTLEncoder(keyExprEnc, avroEnc)
 
   // empty row used for values
   private val EMPTY_ROW =
@@ -116,22 +132,57 @@ abstract class SingleKeyTTLStateImpl(
     store.put(encodedTtlKey, EMPTY_ROW, ttlColumnFamilyName)
   }
 
+  def upsertTTLForStateKey(
+      expirationMs: Long,
+      groupingKey: Array[Byte]): Unit = {
+    val encodedTtlKey = keyTTLRowEncoder.encodeTTLRow(
+      expirationMs, groupingKey)
+    store.put(encodedTtlKey, Array[Byte](4), ttlColumnFamilyName)
+  }
+
   /**
    * Clears any state which has ttl older than [[ttlExpirationMs]].
    */
   override def clearExpiredState(): Long = {
-    val iterator = store.iterator(ttlColumnFamilyName)
-    var numValuesExpired = 0L
+    if (usingAvro) {
+      val iterator = store.byteArrayIter(ttlColumnFamilyName)
+      var numValuesExpired = 0L
 
-    iterator.takeWhile { kv =>
-      val expirationMs = kv.key.getLong(0)
-      StateTTL.isExpired(expirationMs, ttlExpirationMs)
-    }.foreach { kv =>
-      val groupingKey = kv.key.getStruct(1, keyExprEnc.schema.length)
-      numValuesExpired += clearIfExpired(groupingKey)
-      store.remove(kv.key, ttlColumnFamilyName)
+      iterator.takeWhile { kv =>
+        val row = kv.key
+        val reader = new GenericDatumReader[Any](keyAvroType)
+        val decoder = DecoderFactory.get().binaryDecoder(row, 0, row.length, null)
+        val genericData = reader.read(null, decoder) // bytes -> GenericDataRecord
+        val internalRow = avroEnc.get.keyDeserializer.deserialize(
+          genericData).orNull.asInstanceOf[InternalRow] // GenericDataRecord -> InternalRow
+        val expirationMs = internalRow.getLong(0)
+        StateTTL.isExpired(expirationMs, ttlExpirationMs)
+      }.foreach { kv =>
+        val row = kv.key
+        val reader = new GenericDatumReader[Any](keyAvroType)
+        val decoder = DecoderFactory.get().binaryDecoder(row, 0, row.length, null)
+        val genericData = reader.read(null, decoder) // bytes -> GenericDataRecord
+        val internalRow = avroEnc.get.keyDeserializer.deserialize(
+          genericData).orNull.asInstanceOf[InternalRow] // GenericDataRecord -> InternalRow
+        val groupingKey = internalRow.getBinary(1)
+        numValuesExpired += clearIfExpired(groupingKey)
+        store.remove(kv.key, ttlColumnFamilyName)
+      }
+      numValuesExpired
+    } else {
+      val iterator = store.iterator(ttlColumnFamilyName)
+      var numValuesExpired = 0L
+
+      iterator.takeWhile { kv =>
+        val expirationMs = kv.key.getLong(0)
+        StateTTL.isExpired(expirationMs, ttlExpirationMs)
+      }.foreach { kv =>
+        val groupingKey = kv.key.getStruct(1, keyExprEnc.schema.length)
+        numValuesExpired += clearIfExpired(groupingKey)
+        store.remove(kv.key, ttlColumnFamilyName)
+      }
+      numValuesExpired
     }
-    numValuesExpired
   }
 
   private[sql] def ttlIndexIterator(): Iterator[SingleKeyTTLRow] = {
@@ -174,6 +225,50 @@ abstract class SingleKeyTTLStateImpl(
     }
   }
 
+  private[sql] def ttlIndexByteIterator(): Iterator[SingleKeyByteArrayTTLRow] = {
+    val ttlIterator = store.byteArrayIter(ttlColumnFamilyName)
+
+    new Iterator[SingleKeyByteArrayTTLRow] {
+      override def hasNext: Boolean = ttlIterator.hasNext
+
+      override def next(): SingleKeyByteArrayTTLRow = {
+        val row = ttlIterator.next().key
+        val reader = new GenericDatumReader[Any](keyAvroType)
+        val decoder = DecoderFactory.get().binaryDecoder(row, 0, row.length, null)
+        val genericData = reader.read(null, decoder) // bytes -> GenericDataRecord
+        val internalRow = avroEnc.get.keyDeserializer.deserialize(
+          genericData).orNull.asInstanceOf[InternalRow] // GenericDataRecord -> InternalRow
+        SingleKeyByteArrayTTLRow(
+          expirationMs = internalRow.getLong(0),
+          groupingKey = internalRow.getBinary(1)
+        )
+      }
+    }
+  }
+  private[sql] def getValuesInTTLState(groupingKey: Array[Byte]): Iterator[Long] = {
+    val ttlIterator = ttlIndexByteIterator()
+    var nextValue: Option[Long] = None
+
+    new Iterator[Long] {
+      override def hasNext: Boolean = {
+        while (nextValue.isEmpty && ttlIterator.hasNext) {
+          val nextTtlValue = ttlIterator.next()
+          val valueGroupingKey = nextTtlValue.groupingKey
+          if (valueGroupingKey sameElements groupingKey) {
+            nextValue = Some(nextTtlValue.expirationMs)
+          }
+        }
+        nextValue.isDefined
+      }
+
+      override def next(): Long = {
+        val result = nextValue.get
+        nextValue = None
+        result
+      }
+    }
+  }
+
   /**
    * Clears the user state associated with this grouping key
    * if it has expired. This function is called by Spark to perform
@@ -190,6 +285,8 @@ abstract class SingleKeyTTLStateImpl(
    * @return true if the state was cleared, false otherwise.
    */
   def clearIfExpired(groupingKey: UnsafeRow): Long
+
+  def clearIfExpired(groupingKey: Array[Byte]): Long
 }
 
 /**

@@ -1053,14 +1053,19 @@ class RangeKeyScanStateEncoder(
     // Skip column family prefix if present
     val startOffset = decodeKeyStartOffset
 
-    // Read prefix length
-    val prefixLen = Platform.getInt(keyBytes, startOffset)
+    // Skip the version byte - we don't return this to the user
+    val dataStartOffset = startOffset + STATE_ENCODING_NUM_VERSION_BYTES
 
-    // Total length of data we want to return
-    val totalLen = keyBytes.length - 4 - offsetForColFamilyPrefix
+    // Read prefix length
+    val prefixLen = Platform.getInt(keyBytes, dataStartOffset)
+
+    // Total length of data we want to return = total length -
+    // (version byte + prefix length int + column family prefix)
+    val totalLen = keyBytes.length - STATE_ENCODING_NUM_VERSION_BYTES - 4 -
+      offsetForColFamilyPrefix
 
     val result = new Array[Byte](totalLen)
-    Platform.copyMemory(keyBytes, startOffset + 4,
+    Platform.copyMemory(keyBytes, dataStartOffset + 4,
       result, Platform.BYTE_ARRAY_OFFSET, totalLen)
 
     result

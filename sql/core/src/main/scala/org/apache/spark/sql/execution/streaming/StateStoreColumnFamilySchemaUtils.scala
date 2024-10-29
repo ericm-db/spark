@@ -16,12 +16,13 @@
  */
 package org.apache.spark.sql.execution.streaming
 
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql.Encoder
 import org.apache.spark.sql.avro.{AvroDeserializer, AvroOptions, AvroSerializer, SchemaConverters}
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchemaUtils._
 import org.apache.spark.sql.execution.streaming.state.{AvroEncoderSpec, NoPrefixKeyStateEncoderSpec, PrefixKeyScanStateEncoderSpec, RangeKeyScanStateEncoderSpec, StateStoreColFamilySchema}
-import org.apache.spark.sql.types.{NullType, StructField, StructType}
+import org.apache.spark.sql.types.{BinaryType, LongType, NullType, StructField, StructType}
 
 object StateStoreColumnFamilySchemaUtils {
 
@@ -29,7 +30,7 @@ object StateStoreColumnFamilySchemaUtils {
     new StateStoreColumnFamilySchemaUtils(initializeAvroSerde)
 }
 
-class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) {
+class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) extends Logging {
 
   private def getAvroSerde(
       keySchema: StructType,
@@ -40,6 +41,9 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) {
       val avroOptions = AvroOptions(Map.empty)
       val keyAvroType = SchemaConverters.toAvroType(keySchema)
       val keySer = new AvroSerializer(keySchema, keyAvroType, nullable = false)
+      val keyDe = new AvroDeserializer(keyAvroType, keySchema,
+        avroOptions.datetimeRebaseModeInRead, avroOptions.useStableIdForUnionType,
+        avroOptions.stableIdPrefixForUnionType, avroOptions.recursiveFieldMaxDepth)
       val ser = new AvroSerializer(valSchema, avroType, nullable = false)
       val de = new AvroDeserializer(avroType, valSchema,
         avroOptions.datetimeRebaseModeInRead, avroOptions.useStableIdForUnionType,
@@ -54,7 +58,7 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) {
           (Some(ckSer), Some(ckDe))
         case None => (None, None)
       }
-      Some(AvroEncoderSpec(keySer, ser, de, ckSerDe._1, ckSerDe._2))
+      Some(AvroEncoderSpec(keySer, keyDe, ser, de, ckSerDe._1, ckSerDe._2))
     } else {
       None
     }
@@ -63,14 +67,16 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) {
   def getTtlStateSchema[T](
       stateName: String,
       keyEncoder: ExpressionEncoder[Any]): StateStoreColFamilySchema = {
-    val ttlKeySchema = getSingleKeyTTLRowSchema(keyEncoder.schema)
+    val ttlKeySchema = new StructType()
+      .add("expirationMs", LongType)
+      .add("groupingKey", BinaryType)
     val ttlValSchema = StructType(Array(StructField("__dummy__", NullType)))
     StateStoreColFamilySchema(
       stateName,
       ttlKeySchema,
       ttlValSchema,
       Some(RangeKeyScanStateEncoderSpec(ttlKeySchema, Seq(0))),
-      avroEnc = getAvroSerde(keyEncoder.schema, ttlValSchema))
+      avroEnc = getAvroSerde(ttlKeySchema, ttlValSchema))
   }
 
   def getTtlStateSchema[T](

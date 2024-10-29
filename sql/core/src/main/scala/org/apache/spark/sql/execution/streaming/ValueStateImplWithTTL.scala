@@ -45,11 +45,15 @@ class ValueStateImplWithTTL[S](
     ttlConfig: TTLConfig,
     batchTimestampMs: Long,
     avroEnc: Option[AvroEncoderSpec],   // TODO: Add Avro Encoding support for TTL
+    ttlAvroEnc: Option[AvroEncoderSpec],
     metrics: Map[String, SQLMetric] = Map.empty)
   extends SingleKeyTTLStateImpl(
-    stateName, store, keyExprEnc, batchTimestampMs) with ValueState[S] {
+    stateName, store, keyExprEnc, batchTimestampMs, ttlAvroEnc) with ValueState[S] {
 
-  private val stateTypesEncoder = UnsafeRowTypesEncoder(keyExprEnc, valEncoder,
+  private val usingAvro: Boolean = avroEnc.isDefined
+  private val avroTypesEncoder = new AvroTypesEncoder(
+    keyExprEnc, valEncoder, stateName, hasTtl = true, avroEnc)
+  private val unsafeRowTypesEncoder = UnsafeRowTypesEncoder(keyExprEnc, valEncoder,
     stateName, hasTtl = true)
   private val ttlExpirationMs =
     StateTTL.calculateExpirationTimeForDuration(ttlConfig.ttlDuration, batchTimestampMs)
@@ -74,13 +78,38 @@ class ValueStateImplWithTTL[S](
 
   /** Function to return associated value with key if exists and null otherwise */
   override def get(): S = {
-    val encodedGroupingKey = stateTypesEncoder.encodeGroupingKey()
+    if (usingAvro) {
+      getAvro()
+    } else {
+      getUnsafeRow()
+    }
+  }
+
+  private def getUnsafeRow(): S = {
+    val encodedGroupingKey = unsafeRowTypesEncoder.encodeGroupingKey()
     val retRow = store.get(encodedGroupingKey, stateName)
 
     if (retRow != null) {
-      val resState = stateTypesEncoder.decodeValue(retRow)
+      val resState = unsafeRowTypesEncoder.decodeValue(retRow)
 
-      if (!stateTypesEncoder.isExpired(retRow, batchTimestampMs)) {
+      if (!unsafeRowTypesEncoder.isExpired(retRow, batchTimestampMs)) {
+        resState
+      } else {
+        null.asInstanceOf[S]
+      }
+    } else {
+      null.asInstanceOf[S]
+    }
+  }
+
+  private def getAvro(): S = {
+    val encodedGroupingKey = avroTypesEncoder.encodeGroupingKey()
+    val retRow = store.get(encodedGroupingKey, stateName)
+
+    if (retRow != null) {
+      val resState = avroTypesEncoder.decodeValue(retRow)
+
+      if (!avroTypesEncoder.isExpired(retRow, batchTimestampMs)) {
         resState
       } else {
         null.asInstanceOf[S]
@@ -92,17 +121,30 @@ class ValueStateImplWithTTL[S](
 
   /** Function to update and overwrite state associated with given key */
   override def update(newState: S): Unit = {
-    val encodedValue = stateTypesEncoder.encodeValue(newState, ttlExpirationMs)
-    val serializedGroupingKey = stateTypesEncoder.encodeGroupingKey()
-    store.put(serializedGroupingKey,
-      encodedValue, stateName)
-    TWSMetricsUtils.incrementMetric(metrics, "numUpdatedStateRows")
-    upsertTTLForStateKey(ttlExpirationMs, serializedGroupingKey)
+    if (usingAvro) {
+      val encodedValue = avroTypesEncoder.encodeValue(newState, ttlExpirationMs)
+      val serializedGroupingKey = avroTypesEncoder.encodeGroupingKey()
+      store.put(serializedGroupingKey,
+        encodedValue, stateName)
+      TWSMetricsUtils.incrementMetric(metrics, "numUpdatedStateRows")
+      upsertTTLForStateKey(ttlExpirationMs, serializedGroupingKey)
+    } else {
+      val encodedValue = unsafeRowTypesEncoder.encodeValue(newState, ttlExpirationMs)
+      val serializedGroupingKey = unsafeRowTypesEncoder.encodeGroupingKey()
+      store.put(serializedGroupingKey,
+        encodedValue, stateName)
+      TWSMetricsUtils.incrementMetric(metrics, "numUpdatedStateRows")
+      upsertTTLForStateKey(ttlExpirationMs, serializedGroupingKey)
+    }
   }
 
   /** Function to remove state for given key */
   override def clear(): Unit = {
-    store.remove(stateTypesEncoder.encodeGroupingKey(), stateName)
+    if (usingAvro) {
+      store.remove(avroTypesEncoder.encodeGroupingKey(), stateName)
+    } else {
+      store.remove(unsafeRowTypesEncoder.encodeGroupingKey(), stateName)
+    }
     TWSMetricsUtils.incrementMetric(metrics, "numRemovedStateRows")
     clearTTLState()
   }
@@ -112,7 +154,21 @@ class ValueStateImplWithTTL[S](
 
     var result = 0L
     if (retRow != null) {
-      if (stateTypesEncoder.isExpired(retRow, batchTimestampMs)) {
+      if (unsafeRowTypesEncoder.isExpired(retRow, batchTimestampMs)) {
+        store.remove(groupingKey, stateName)
+        TWSMetricsUtils.incrementMetric(metrics, "numRemovedStateRows")
+        result = 1L
+      }
+    }
+    result
+  }
+
+  def clearIfExpired(groupingKey: Array[Byte]): Long = {
+    val retRow = store.get(groupingKey, stateName)
+
+    var result = 0L
+    if (retRow != null) {
+      if (avroTypesEncoder.isExpired(retRow, batchTimestampMs)) {
         store.remove(groupingKey, stateName)
         TWSMetricsUtils.incrementMetric(metrics, "numRemovedStateRows")
         result = 1L
@@ -133,14 +189,26 @@ class ValueStateImplWithTTL[S](
    * end of the micro-batch.
    */
   private[sql] def getWithoutEnforcingTTL(): Option[S] = {
-    val encodedGroupingKey = stateTypesEncoder.encodeGroupingKey()
-    val retRow = store.get(encodedGroupingKey, stateName)
+    if (usingAvro) {
+      val encodedGroupingKey = avroTypesEncoder.encodeGroupingKey()
+      val retRow = store.get(encodedGroupingKey, stateName)
 
-    if (retRow != null) {
-      val resState = stateTypesEncoder.decodeValue(retRow)
-      Some(resState)
+      if (retRow != null) {
+        val resState = avroTypesEncoder.decodeValue(retRow)
+        Some(resState)
+      } else {
+        None
+      }
     } else {
-      None
+      val encodedGroupingKey = unsafeRowTypesEncoder.encodeGroupingKey()
+      val retRow = store.get(encodedGroupingKey, stateName)
+
+      if (retRow != null) {
+        val resState = unsafeRowTypesEncoder.decodeValue(retRow)
+        Some(resState)
+      } else {
+        None
+      }
     }
   }
 
@@ -148,16 +216,30 @@ class ValueStateImplWithTTL[S](
    * Read the ttl value associated with the grouping key.
    */
   private[sql] def getTTLValue(): Option[(S, Long)] = {
-    val encodedGroupingKey = stateTypesEncoder.encodeGroupingKey()
-    val retRow = store.get(encodedGroupingKey, stateName)
+    if (usingAvro) {
+      val encodedGroupingKey = avroTypesEncoder.encodeGroupingKey()
+      val retRow = store.get(encodedGroupingKey, stateName)
 
-    // if the returned row is not null, we want to return the value associated with the
-    // ttlExpiration
-    if (retRow != null) {
-      val ttlExpiration = stateTypesEncoder.decodeTtlExpirationMs(retRow)
-      ttlExpiration.map(expiration => (stateTypesEncoder.decodeValue(retRow), expiration))
+      // if the returned row is not null, we want to return the value associated with the
+      // ttlExpiration
+      if (retRow != null) {
+        val ttlExpiration = avroTypesEncoder.decodeTtlExpirationMs(retRow)
+        ttlExpiration.map(expiration => (avroTypesEncoder.decodeValue(retRow), expiration))
+      } else {
+        None
+      }
     } else {
-      None
+      val encodedGroupingKey = unsafeRowTypesEncoder.encodeGroupingKey()
+      val retRow = store.get(encodedGroupingKey, stateName)
+
+      // if the returned row is not null, we want to return the value associated with the
+      // ttlExpiration
+      if (retRow != null) {
+        val ttlExpiration = unsafeRowTypesEncoder.decodeTtlExpirationMs(retRow)
+        ttlExpiration.map(expiration => (unsafeRowTypesEncoder.decodeValue(retRow), expiration))
+      } else {
+        None
+      }
     }
   }
 
@@ -166,7 +248,11 @@ class ValueStateImplWithTTL[S](
    * grouping key.
    */
   private[sql] def getValuesInTTLState(): Iterator[Long] = {
-    getValuesInTTLState(stateTypesEncoder.encodeGroupingKey())
+    if (usingAvro) {
+      getValuesInTTLState(avroTypesEncoder.encodeGroupingKey())
+    } else {
+      getValuesInTTLState(unsafeRowTypesEncoder.encodeGroupingKey())
+    }
   }
 }
 

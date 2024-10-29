@@ -22,6 +22,7 @@ import java.io.ByteArrayOutputStream
 import org.apache.avro.generic.{GenericDatumReader, GenericDatumWriter}
 import org.apache.avro.io.{DecoderFactory, EncoderFactory}
 
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql.Encoder
 import org.apache.spark.sql.avro.SchemaConverters
 import org.apache.spark.sql.catalyst.InternalRow
@@ -48,6 +49,11 @@ object TransformWithStateKeyValueRowSchemaUtils {
     new StructType()
       .add("expirationMs", LongType)
       .add("groupingKey", keySchema)
+
+  def getSingleKeyTTLAvroRowSchema: StructType =
+    new StructType()
+      .add("expirationMs", LongType)
+      .add("groupingKey", BinaryType)
 
   def getCompositeKeyTTLRowSchema(
       groupingKeySchema: StructType,
@@ -188,7 +194,7 @@ class AvroTypesEncoder[V](
     valEncoder: Encoder[V],
     stateName: String,
     hasTtl: Boolean,
-    avroSerde: Option[AvroEncoderSpec]) extends StateTypesEncoder[V, Array[Byte]] {
+    avroSerde: Option[AvroEncoderSpec]) extends StateTypesEncoder[V, Array[Byte]] with Logging {
 
   val out = new ByteArrayOutputStream
 
@@ -202,7 +208,7 @@ class AvroTypesEncoder[V](
   private val keyAvroType = SchemaConverters.toAvroType(keySchema)
 
   // case class -> dataType
-  private val valSchema: StructType = valEncoder.schema
+  private val valSchema: StructType = getValueSchemaWithTTL(valEncoder.schema, hasTtl)
   // dataType -> avroType
   private val valueAvroType = SchemaConverters.toAvroType(valSchema)
 
@@ -251,15 +257,38 @@ class AvroTypesEncoder[V](
   }
 
   override def encodeValue(value: V, expirationMs: Long): Array[Byte] = {
-    throw new UnsupportedOperationException
+    val objRow: InternalRow = objToRowSerializer.apply(value).copy() // V -> InternalRow
+    val avroData =
+      avroSerde.get.valueSerializer.serialize(
+        InternalRow(objRow, expirationMs)) // InternalRow -> GenericDataRecord
+    out.reset()
+
+    val encoder = EncoderFactory.get().directBinaryEncoder(out, null)
+    val writer = new GenericDatumWriter[Any](
+      valueAvroType) // Defining Avro writer for this struct type
+
+    writer.write(avroData, encoder) // GenericDataRecord -> bytes
+    encoder.flush()
+    out.toByteArray
   }
 
   override def decodeTtlExpirationMs(row: Array[Byte]): Option[Long] = {
-    throw new UnsupportedOperationException
+    val reader = new GenericDatumReader[Any](valueAvroType)
+    val decoder = DecoderFactory.get().binaryDecoder(row, 0, row.length, null)
+    val genericData = reader.read(null, decoder) // bytes -> GenericDataRecord
+    val internalRow = avroSerde.get.valueDeserializer.deserialize(
+      genericData).orNull.asInstanceOf[InternalRow] // GenericDataRecord -> InternalRow
+    val expirationMs = internalRow.getLong(1)
+    if (expirationMs == -1) {
+      None
+    } else {
+      Some(expirationMs)
+    }
   }
 
   override def isExpired(row: Array[Byte], batchTimestampMs: Long): Boolean = {
-    throw new UnsupportedOperationException
+    val expirationMs = decodeTtlExpirationMs(row)
+    expirationMs.exists(StateTTL.isExpired(_, batchTimestampMs))
   }
 }
 
@@ -437,13 +466,14 @@ class CompositeKeyAvroRowEncoder[K, V](
 /** Class for TTL with single key serialization */
 class SingleKeyTTLEncoder(
     keyExprEnc: ExpressionEncoder[Any],
-    avroEncoderSpec: Option[AvroEncoderSpec] = None) {
+    avroEnc: Option[AvroEncoderSpec] = None) extends Logging {
 
   private lazy val out = new ByteArrayOutputStream
   private val ttlKeyProjection = UnsafeProjection.create(
     getSingleKeyTTLRowSchema(keyExprEnc.schema))
 
-  private val ttlKeyType = SchemaConverters.toAvroType(keyExprEnc.schema)
+  private val ttlKeyAvroType = SchemaConverters.toAvroType(
+    getSingleKeyTTLAvroRowSchema)
 
   def encodeTTLRow(expirationMs: Long, groupingKey: UnsafeRow): UnsafeRow = {
     ttlKeyProjection.apply(
@@ -451,14 +481,12 @@ class SingleKeyTTLEncoder(
   }
 
   def encodeTTLRow(expirationMs: Long, groupingKey: Array[Byte]): Array[Byte] = {
-    val objRow: InternalRow = InternalRow(expirationMs, groupingKey.asInstanceOf[InternalRow])
-    val avroData =
-      avroEncoderSpec.get.valueSerializer.serialize(objRow) // InternalRow -> GenericDataRecord
+    val internalRow = InternalRow(expirationMs, groupingKey)
+    val avroData = avroEnc.get.keySerializer.serialize(internalRow)
     out.reset()
-
     val encoder = EncoderFactory.get().directBinaryEncoder(out, null)
     val writer = new GenericDatumWriter[Any](
-      ttlKeyType) // Defining Avro writer for this struct type
+      ttlKeyAvroType) // Defining Avro writer for this struct type
 
     writer.write(avroData, encoder) // GenericDataRecord -> bytes
     encoder.flush()

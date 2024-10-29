@@ -173,7 +173,8 @@ class StatefulProcessorHandleImpl(
 
     assert(batchTimestampMs.isDefined)
     val valueStateWithTTL = new ValueStateImplWithTTL[T](store, stateName,
-      keyEncoder, valEncoder, ttlConfig, batchTimestampMs.get, avroEnc = None, metrics)
+      keyEncoder, valEncoder, ttlConfig, batchTimestampMs.get, schemas(stateName).avroEnc,
+      schemas("$ttl_" + stateName).avroEnc, metrics)
     ttlStates.add(valueStateWithTTL)
     TWSMetricsUtils.incrementMetric(metrics, "numValueStateWithTTLVars")
 
@@ -283,7 +284,8 @@ class StatefulProcessorHandleImpl(
 
     assert(batchTimestampMs.isDefined)
     val listStateWithTTL = new ListStateImplWithTTL[T](store, stateName,
-      keyEncoder, valEncoder, ttlConfig, batchTimestampMs.get, avroEnc = None, metrics)
+      keyEncoder, valEncoder, ttlConfig, batchTimestampMs.get, schemas(stateName).avroEnc,
+      schemas("$ttl_" + stateName).avroEnc, metrics)
     TWSMetricsUtils.incrementMetric(metrics, "numListStateWithTTLVars")
     ttlStates.add(listStateWithTTL)
 
