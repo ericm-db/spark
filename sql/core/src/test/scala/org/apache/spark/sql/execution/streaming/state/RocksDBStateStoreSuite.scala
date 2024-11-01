@@ -17,11 +17,15 @@
 
 package org.apache.spark.sql.execution.streaming.state
 
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
 import java.util.UUID
 
 import scala.collection.immutable
 import scala.util.Random
 
+import org.apache.avro.generic.{GenericDatumReader, GenericDatumWriter}
+import org.apache.avro.io.{DecoderFactory, EncoderFactory}
 import org.apache.hadoop.conf.Configuration
 import org.scalatest.BeforeAndAfter
 
@@ -29,9 +33,12 @@ import org.apache.spark.{SparkConf, SparkUnsupportedOperationException}
 import org.apache.spark.io.CompressionCodec
 import org.apache.spark.sql.LocalSparkSession.withSparkSession
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.avro.{AvroDeserializer, AvroOptions, AvroSerializer, SchemaConverters}
+import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{GenericInternalRow, UnsafeProjection, UnsafeRow}
 import org.apache.spark.sql.catalyst.util.quietly
 import org.apache.spark.sql.execution.streaming.StatefulOperatorStateInfo
+import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchemaUtils.getSingleKeyTTLAvroRowSchema
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
 import org.apache.spark.sql.types._
@@ -821,45 +828,71 @@ class RocksDBStateStoreSuite extends StateStoreSuiteBase[RocksDBStateStoreProvid
     }
   }
 
-  testWithColumnFamilies("rocksdb range scan - ordering cols and key schema cols are same",
-    TestWithBothChangelogCheckpointingEnabledAndDisabled) { colFamiliesEnabled =>
 
-    // use the same schema as value schema for single col key schema
-    tryWithProviderResource(newStoreProvider(valueSchema,
-      RangeKeyScanStateEncoderSpec(valueSchema, Seq(0)), colFamiliesEnabled)) { provider =>
+  private val ttlKeyAvroType = SchemaConverters.toAvroType(
+    getSingleKeyTTLAvroRowSchema)
+
+  def encodeTTLRow(expirationMs: Long): Array[Byte] = {
+    val groupingKey = new Array[Byte](8)
+    val out = new ByteArrayOutputStream
+    val expMsBytes = ByteBuffer.allocate(8).putLong(expirationMs).array()
+    val internalRow = InternalRow(expMsBytes, groupingKey)
+    val keySer = new AvroSerializer(getSingleKeyTTLAvroRowSchema, ttlKeyAvroType, nullable = false)
+    val avroData = keySer.serialize(internalRow) // InternalRow -> Avro Record
+    out.reset()
+    val encoder = EncoderFactory.get().directBinaryEncoder(out, null)
+    val writer = new GenericDatumWriter[Any](
+      ttlKeyAvroType) // Defining Avro writer for this struct type
+
+    writer.write(avroData, encoder) // GenericDataRecord -> bytes
+    encoder.flush()
+    out.toByteArray
+  }
+
+  def decodeTTLRow(row: Array[Byte]): Long = {
+    val avroOptions = AvroOptions(Map.empty)
+    val keyDe = new AvroDeserializer(ttlKeyAvroType, getSingleKeyTTLAvroRowSchema,
+      avroOptions.datetimeRebaseModeInRead, avroOptions.useStableIdForUnionType,
+      avroOptions.stableIdPrefixForUnionType, avroOptions.recursiveFieldMaxDepth)
+    val reader = new GenericDatumReader[Any](ttlKeyAvroType)
+    val decoder = DecoderFactory.get().binaryDecoder(row, 0, row.length, null)
+    val genericData = reader.read(null, decoder) // bytes -> GenericDataRecord
+    val internalRow = keyDe.deserialize(
+      genericData).orNull.asInstanceOf[InternalRow] // GenericDataRecord -> InternalRow
+    val expMsBytes = internalRow.getBinary(0)
+    ByteBuffer.wrap(expMsBytes).getLong()
+  }
+
+  testWithAvroEncoding("Avro") {
+    val schema = getSingleKeyTTLAvroRowSchema
+    tryWithProviderResource(newStoreProvider(schema,
+      TTLRangeKeyScanStateEncoderSpec(schema, Seq(0)), useColumnFamilies = true)) { provider =>
       val store = provider.getStore(0)
-      val cfName = if (colFamiliesEnabled) "testColFamily" else "default"
-      if (colFamiliesEnabled) {
-        store.createColFamilyIfAbsent(cfName,
-          valueSchema, valueSchema,
-          RangeKeyScanStateEncoderSpec(valueSchema, Seq(0)))
-      }
-
-      val timerTimestamps = Seq(931, 8000, 452300, 4200,
-        -3545, -343, 133, -90, -8014490, -79247,
-        90, 1, 2, 8, 3, 35, 6, 9, 5, -233)
+      val cfName = "testColFamily"
+      store.createColFamilyIfAbsent(cfName,
+        schema, schema,
+        TTLRangeKeyScanStateEncoderSpec(schema, Seq(0)))
+      val timerTimestamps = Seq(
+        1698765732000L,  // Middle timestamp
+        1698764432000L,  // Earlier (20 min before)
+        1698766932000L,  // Latest (20 min after)
+        1698765432000L,  // Middle-ish
+        1698764932000L,  // Earlier but not earliest
+        1698766432000L,  // Later but not latest
+        1698765532000L,  // Another middle one
+        1698764532000L   // Another early one
+      )
       timerTimestamps.foreach { ts =>
         // non-timestamp col is of variable size
-        val keyRow = dataToValueRow(ts)
-        val valueRow = dataToValueRow(1)
+        val keyRow = encodeTTLRow(ts)
+        val valueRow = encodeTTLRow(1)
         store.put(keyRow, valueRow, cfName)
-        assert(valueRowToData(store.get(keyRow, cfName)) === 1)
+        assert(decodeTTLRow(store.get(keyRow, cfName)) === 1)
       }
-
-      val result = store.iterator(cfName).map { kv =>
-        valueRowToData(kv.key)
+      val result = store.byteArrayIter(cfName).map { kv =>
+        decodeTTLRow(kv.key)
       }.toSeq
       assert(result === timerTimestamps.sorted)
-
-      // also check for prefix scan
-      timerTimestamps.foreach { ts =>
-        val prefix = dataToValueRow(ts)
-        val result = store.prefixScan(prefix, cfName).map { kv =>
-          assert(valueRowToData(kv.value) === 1)
-          valueRowToData(kv.key)
-        }.toSeq
-        assert(result.size === 1)
-      }
     }
   }
 

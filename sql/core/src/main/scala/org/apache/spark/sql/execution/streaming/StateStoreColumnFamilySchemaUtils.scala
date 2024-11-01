@@ -21,8 +21,8 @@ import org.apache.spark.sql.Encoder
 import org.apache.spark.sql.avro.{AvroDeserializer, AvroOptions, AvroSerializer, SchemaConverters}
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchemaUtils._
-import org.apache.spark.sql.execution.streaming.state.{AvroEncoderSpec, NoPrefixKeyStateEncoderSpec, PrefixKeyScanStateEncoderSpec, RangeKeyScanStateEncoderSpec, StateStoreColFamilySchema}
-import org.apache.spark.sql.types.{BinaryType, LongType, NullType, StructField, StructType}
+import org.apache.spark.sql.execution.streaming.state.{AvroEncoderSpec, NoPrefixKeyStateEncoderSpec, PrefixKeyScanStateEncoderSpec, RangeKeyScanStateEncoderSpec, StateStoreColFamilySchema, TTLRangeKeyScanStateEncoderSpec}
+import org.apache.spark.sql.types.{BinaryType, NullType, StructField, StructType}
 
 object StateStoreColumnFamilySchemaUtils {
 
@@ -68,14 +68,14 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) extends Lo
       stateName: String,
       keyEncoder: ExpressionEncoder[Any]): StateStoreColFamilySchema = {
     val ttlKeySchema = new StructType()
-      .add("expirationMs", LongType)
+      .add("expirationMs", BinaryType)
       .add("groupingKey", BinaryType)
     val ttlValSchema = StructType(Array(StructField("__dummy__", NullType)))
     StateStoreColFamilySchema(
       stateName,
       ttlKeySchema,
       ttlValSchema,
-      Some(RangeKeyScanStateEncoderSpec(ttlKeySchema, Seq(0))),
+      Some(TTLRangeKeyScanStateEncoderSpec(ttlKeySchema, Seq(0))),
       avroEnc = getAvroSerde(ttlKeySchema, ttlValSchema))
   }
 

@@ -395,6 +395,10 @@ object KeyStateEncoderSpec {
         val orderingOrdinals = m("orderingOrdinals").
           asInstanceOf[List[_]].map(_.asInstanceOf[BigInt].toInt)
         RangeKeyScanStateEncoderSpec(keySchema, orderingOrdinals)
+      case "TTLRangeKeyScanStateEncoderSpec" =>
+        val orderingOrdinals = m("orderingOrdinals").
+          asInstanceOf[List[_]].map(_.asInstanceOf[BigInt].toInt)
+        TTLRangeKeyScanStateEncoderSpec(keySchema, orderingOrdinals)
       case "PrefixKeyScanStateEncoderSpec" =>
         val numColsPrefixKey = m("numColsPrefixKey").asInstanceOf[BigInt].toInt
         PrefixKeyScanStateEncoderSpec(keySchema, numColsPrefixKey)
@@ -431,6 +435,20 @@ case class RangeKeyScanStateEncoderSpec(
 
   override def jsonValue: JValue = {
     ("keyStateEncoderType" -> JString("RangeKeyScanStateEncoderSpec")) ~
+      ("orderingOrdinals" -> orderingOrdinals.map(JInt(_)))
+  }
+}
+
+/** Encodes rows so that they can be range-scanned based on orderingOrdinals */
+case class TTLRangeKeyScanStateEncoderSpec(
+    keySchema: StructType,
+    orderingOrdinals: Seq[Int]) extends KeyStateEncoderSpec {
+  if (orderingOrdinals.isEmpty || orderingOrdinals.length > keySchema.length) {
+    throw StateStoreErrors.incorrectNumOrderingColsForRangeScan(orderingOrdinals.length.toString)
+  }
+
+  override def jsonValue: JValue = {
+    ("keyStateEncoderType" -> JString("TTLRangeKeyScanStateEncoderSpec")) ~
       ("orderingOrdinals" -> orderingOrdinals.map(JInt(_)))
   }
 }

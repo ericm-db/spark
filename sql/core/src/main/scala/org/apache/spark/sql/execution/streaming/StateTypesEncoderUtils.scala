@@ -18,6 +18,7 @@
 package org.apache.spark.sql.execution.streaming
 
 import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
 
 import org.apache.avro.generic.{GenericDatumReader, GenericDatumWriter}
 import org.apache.avro.io.{DecoderFactory, EncoderFactory}
@@ -52,7 +53,7 @@ object TransformWithStateKeyValueRowSchemaUtils {
 
   def getSingleKeyTTLAvroRowSchema: StructType =
     new StructType()
-      .add("expirationMs", LongType)
+      .add("expirationMs", BinaryType)
       .add("groupingKey", BinaryType)
 
   def getCompositeKeyTTLRowSchema(
@@ -481,8 +482,9 @@ class SingleKeyTTLEncoder(
   }
 
   def encodeTTLRow(expirationMs: Long, groupingKey: Array[Byte]): Array[Byte] = {
-    val internalRow = InternalRow(expirationMs, groupingKey)
-    val avroData = avroEnc.get.keySerializer.serialize(internalRow)
+    val expMsBytes = ByteBuffer.allocate(8).putLong(expirationMs).array()
+    val internalRow = InternalRow(expMsBytes, groupingKey)
+    val avroData = avroEnc.get.keySerializer.serialize(internalRow) // InternalRow -> Avro Record
     out.reset()
     val encoder = EncoderFactory.get().directBinaryEncoder(out, null)
     val writer = new GenericDatumWriter[Any](

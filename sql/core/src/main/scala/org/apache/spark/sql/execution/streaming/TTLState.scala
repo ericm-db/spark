@@ -16,6 +16,7 @@
  */
 package org.apache.spark.sql.execution.streaming
 
+import java.nio.ByteBuffer
 import java.time.Duration
 
 import org.apache.avro.generic.GenericDatumReader
@@ -28,7 +29,7 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.catalyst.expressions.{UnsafeProjection, UnsafeRow}
 import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchemaUtils._
-import org.apache.spark.sql.execution.streaming.state.{AvroEncoderSpec, RangeKeyScanStateEncoderSpec, StateStore}
+import org.apache.spark.sql.execution.streaming.state.{AvroEncoderSpec, RangeKeyScanStateEncoderSpec, StateStore, TTLRangeKeyScanStateEncoderSpec}
 import org.apache.spark.sql.types._
 
 object StateTTLSchema {
@@ -110,7 +111,8 @@ abstract class SingleKeyTTLStateImpl(
     UnsafeProjection.create(Array[DataType](NullType)).apply(InternalRow.apply(null))
 
   store.createColFamilyIfAbsent(ttlColumnFamilyName, keySchema, TTL_VALUE_ROW_SCHEMA,
-    RangeKeyScanStateEncoderSpec(keySchema, Seq(0)), isInternal = true)
+    if (usingAvro) TTLRangeKeyScanStateEncoderSpec(keySchema, Seq(0))
+    else RangeKeyScanStateEncoderSpec(keySchema, Seq(0)), isInternal = true)
 
   /**
    * This function will be called when clear() on State Variables
@@ -137,6 +139,7 @@ abstract class SingleKeyTTLStateImpl(
       groupingKey: Array[Byte]): Unit = {
     val encodedTtlKey = keyTTLRowEncoder.encodeTTLRow(
       expirationMs, groupingKey)
+    logError(s"### encodedTtlKey: ${encodedTtlKey.mkString("Array(", ", ", ")")}")
     store.put(encodedTtlKey, Array[Byte](4), ttlColumnFamilyName)
   }
 
@@ -155,7 +158,8 @@ abstract class SingleKeyTTLStateImpl(
         val genericData = reader.read(null, decoder) // bytes -> GenericDataRecord
         val internalRow = avroEnc.get.keyDeserializer.deserialize(
           genericData).orNull.asInstanceOf[InternalRow] // GenericDataRecord -> InternalRow
-        val expirationMs = internalRow.getLong(0)
+        val expMsBytes = internalRow.getBinary(0)
+        val expirationMs = ByteBuffer.wrap(expMsBytes).getLong()
         StateTTL.isExpired(expirationMs, ttlExpirationMs)
       }.foreach { kv =>
         val row = kv.key
@@ -238,8 +242,9 @@ abstract class SingleKeyTTLStateImpl(
         val genericData = reader.read(null, decoder) // bytes -> GenericDataRecord
         val internalRow = avroEnc.get.keyDeserializer.deserialize(
           genericData).orNull.asInstanceOf[InternalRow] // GenericDataRecord -> InternalRow
+        logError(s"### expirationMs: ${ByteBuffer.wrap(internalRow.getBinary(0)).getLong()}")
         SingleKeyByteArrayTTLRow(
-          expirationMs = internalRow.getLong(0),
+          expirationMs = ByteBuffer.wrap(internalRow.getBinary(0)).getLong(),
           groupingKey = internalRow.getBinary(1)
         )
       }
