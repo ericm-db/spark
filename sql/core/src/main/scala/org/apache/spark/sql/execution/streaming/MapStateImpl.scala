@@ -33,6 +33,8 @@ import org.apache.spark.sql.types.StructType
  * @param keyExprEnc - Spark SQL encoder for key
  * @param valEncoder - Spark SQL encoder for value
  * @param metrics - metrics to be updated as part of stateful processing
+ * @param avroEnc - optional Avro serializer and deserializer for this state variable that
+ *                is used by the StateStore to encode state in Avro format
  * @tparam K - type of key for map state variable
  * @tparam V - type of value for map state variable
  */

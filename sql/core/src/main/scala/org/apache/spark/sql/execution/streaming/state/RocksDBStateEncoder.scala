@@ -237,6 +237,7 @@ class PrefixKeyScanStateEncoder(
 
   import RocksDBStateEncoder._
 
+  private val usingAvroEncoding = avroEnc.isDefined
   private val prefixKeyFieldsWithIdx: Seq[(StructField, Int)] = {
     keySchema.zipWithIndex.take(numColsPrefixKey)
   }
@@ -256,10 +257,14 @@ class PrefixKeyScanStateEncoder(
     UnsafeProjection.create(refs)
   }
 
+  // Prefix Key schema and projection definitions used by the Avro Serializers
+  // and Deserializers
   private val prefixKeySchema = StructType(keySchema.take(numColsPrefixKey))
   private val prefixKeyAvroType = SchemaConverters.toAvroType(prefixKeySchema)
   private val prefixKeyProj = UnsafeProjection.create(prefixKeySchema)
 
+  // Remaining Key schema and projection definitions used by the Avro Serializers
+  // and Deserializers
   private val remainingKeySchema = StructType(keySchema.drop(numColsPrefixKey))
   private val remainingKeyAvroType = SchemaConverters.toAvroType(remainingKeySchema)
   private val remainingKeyProj = UnsafeProjection.create(remainingKeySchema)
@@ -271,7 +276,7 @@ class PrefixKeyScanStateEncoder(
   private val joinedRowOnKey = new JoinedRow()
 
   override def encodeKey(row: UnsafeRow): Array[Byte] = {
-    val (prefixKeyEncoded, remainingEncoded) = if (avroEnc.isDefined) {
+    val (prefixKeyEncoded, remainingEncoded) = if (usingAvroEncoding) {
       (
         encodeUnsafeRow(
           extractPrefixKey(row),
@@ -319,7 +324,7 @@ class PrefixKeyScanStateEncoder(
     Platform.copyMemory(keyBytes, decodeKeyStartOffset + 4 + prefixKeyEncodedLen,
       remainingKeyEncoded, Platform.BYTE_ARRAY_OFFSET, remainingKeyEncodedLen)
 
-    val (prefixKeyDecoded, remainingKeyDecoded) = if (avroEnc.isDefined) {
+    val (prefixKeyDecoded, remainingKeyDecoded) = if (usingAvroEncoding) {
       (
         decodeToUnsafeRow(
           prefixKeyEncoded,
@@ -347,7 +352,7 @@ class PrefixKeyScanStateEncoder(
   }
 
   override def encodePrefixKey(prefixKey: UnsafeRow): Array[Byte] = {
-    val prefixKeyEncoded = if (avroEnc.isDefined) {
+    val prefixKeyEncoded = if (usingAvroEncoding) {
       encodeUnsafeRow(prefixKey, avroEnc.get.keySerializer, prefixKeyAvroType, out)
     } else {
       encodeUnsafeRow(prefixKey)
@@ -768,7 +773,7 @@ class NoPrefixKeyStateEncoder(
   import RocksDBStateEncoder._
 
   // Reusable objects
-  private val usingAvroEncoding = avroEnc.isDefined
+  private val usingAvroEncoding = usingAvroEncoding
   private val keyRow = new UnsafeRow(keySchema.size)
   private val keyAvroType = SchemaConverters.toAvroType(keySchema)
   private val keyProj = UnsafeProjection.create(keySchema)
@@ -858,7 +863,7 @@ class MultiValuedStateEncoder(
 
   import RocksDBStateEncoder._
 
-  private val usingAvroEncoding = avroEnc.isDefined
+  private val usingAvroEncoding = usingAvroEncoding
   // Reusable objects
   private val out = new ByteArrayOutputStream
   private val valueRow = new UnsafeRow(valueSchema.size)
