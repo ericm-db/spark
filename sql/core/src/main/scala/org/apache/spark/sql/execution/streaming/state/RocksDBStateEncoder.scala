@@ -287,7 +287,7 @@ class PrefixKeyScanStateEncoder(
         ),
         encodeUnsafeRow(
           remainingKeyProjection(row),
-          avroEnc.get.userKeySerializer.get,
+          avroEnc.get.suffixKeySerializer.get,
           remainingKeyAvroType,
           out
         )
@@ -335,7 +335,7 @@ class PrefixKeyScanStateEncoder(
         ),
         decodeToUnsafeRow(
           remainingKeyEncoded,
-          avroEnc.get.userKeyDeserializer.get,
+          avroEnc.get.suffixKeyDeserializer.get,
           remainingKeyAvroType,
           remainingKeyProj
         )
@@ -703,7 +703,7 @@ class RangeKeyScanStateEncoder(
       val remainingEncoded = if (avroEnc.isDefined) {
         encodeUnsafeRow(
           remainingKeyProjection(row),
-          avroEnc.get.userKeySerializer.get,
+          avroEnc.get.suffixKeySerializer.get,
           remainingKeyAvroType,
           out
         )
@@ -767,7 +767,7 @@ class RangeKeyScanStateEncoder(
 
       val remainingKeyDecoded = if (avroEnc.isDefined) {
         decodeToUnsafeRow(remainingKeyEncoded,
-          avroEnc.get.userKeyDeserializer.get,
+          avroEnc.get.suffixKeyDeserializer.get,
           remainingKeyAvroType, remainingKeyAvroProjection)
       } else {
         decodeToUnsafeRow(remainingKeyEncoded,

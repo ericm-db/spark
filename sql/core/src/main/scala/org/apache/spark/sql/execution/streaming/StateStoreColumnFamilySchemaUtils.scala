@@ -62,7 +62,7 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) {
   private def getAvroSerde(
       keySchema: StructType,
       valSchema: StructType,
-      userKeySchema: Option[StructType] = None
+      suffixKeySchema: Option[StructType] = None
   ): Option[AvroEncoderSpec] = {
     if (initializeAvroSerde) {
       val avroType = SchemaConverters.toAvroType(valSchema)
@@ -76,18 +76,18 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) {
       val valueDeserializer = new AvroDeserializer(avroType, valSchema,
         avroOptions.datetimeRebaseModeInRead, avroOptions.useStableIdForUnionType,
         avroOptions.stableIdPrefixForUnionType, avroOptions.recursiveFieldMaxDepth)
-      val (userKeySerializer, userKeyDeserializer) = if (userKeySchema.isDefined) {
-        val userKeyAvroType = SchemaConverters.toAvroType(userKeySchema.get)
-        val ukSer = new AvroSerializer(userKeySchema.get, userKeyAvroType, nullable = false)
-        val ukDe = new AvroDeserializer(userKeyAvroType, userKeySchema.get,
+      val (suffixKeySer, suffixKeyDe) = if (suffixKeySchema.isDefined) {
+        val userKeyAvroType = SchemaConverters.toAvroType(suffixKeySchema.get)
+        val skSer = new AvroSerializer(suffixKeySchema.get, userKeyAvroType, nullable = false)
+        val skDe = new AvroDeserializer(userKeyAvroType, suffixKeySchema.get,
           avroOptions.datetimeRebaseModeInRead, avroOptions.useStableIdForUnionType,
           avroOptions.stableIdPrefixForUnionType, avroOptions.recursiveFieldMaxDepth)
-        (Some(ukSer), Some(ukDe))
+        (Some(skSer), Some(skDe))
       } else {
         (None, None)
       }
       Some(AvroEncoderSpec(
-        keySer, keyDe, valueSerializer, valueDeserializer, userKeySerializer, userKeyDeserializer))
+        keySer, keyDe, valueSerializer, valueDeserializer, suffixKeySer, suffixKeyDe))
     } else {
       None
     }
