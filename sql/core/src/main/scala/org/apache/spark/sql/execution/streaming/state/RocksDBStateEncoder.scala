@@ -31,6 +31,7 @@ import org.apache.spark.sql.avro.{AvroDeserializer, AvroSerializer, SchemaConver
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{BoundReference, JoinedRow, UnsafeProjection, UnsafeRow}
 import org.apache.spark.sql.catalyst.expressions.codegen.UnsafeRowWriter
+import org.apache.spark.sql.execution.streaming.StateStoreColumnFamilySchemaUtils
 import org.apache.spark.sql.execution.streaming.state.RocksDBStateStoreProvider.{STATE_ENCODING_NUM_VERSION_BYTES, STATE_ENCODING_VERSION, VIRTUAL_COL_FAMILY_PREFIX_BYTES}
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.Platform
@@ -412,6 +413,7 @@ class RangeKeyScanStateEncoder(
   extends RocksDBKeyStateEncoderBase(useColumnFamilies, virtualColFamilyId) with Logging {
 
   import RocksDBStateEncoder._
+  logError(s"### avroEnc.isDefined: ${avroEnc.isDefined}")
 
   private val rangeScanKeyFieldsWithOrdinal: Seq[(StructField, Int)] = {
     orderingOrdinals.map { ordinal =>
@@ -478,18 +480,7 @@ class RangeKeyScanStateEncoder(
     UnsafeProjection.create(refs)
   }
 
-  def convertForRangeScan(schema: StructType): StructType = {
-    StructType(schema.fields.map { field =>
-      if (isFixedSize(field.dataType)) {
-        // Convert numeric types to BinaryType while preserving nullability
-        field.copy(dataType = BinaryType)
-      } else {
-        field
-      }
-    })
-  }
-
-  private val rangeScanAvroSchema = convertForRangeScan(
+  private val rangeScanAvroSchema = StateStoreColumnFamilySchemaUtils.convertForRangeScan(
     StructType(rangeScanKeyFieldsWithOrdinal.map(_._1).toArray))
 
   private val rangeScanAvroType = SchemaConverters.toAvroType(rangeScanAvroSchema)

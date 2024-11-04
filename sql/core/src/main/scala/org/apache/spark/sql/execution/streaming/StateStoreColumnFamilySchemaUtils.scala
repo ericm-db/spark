@@ -21,12 +21,30 @@ import org.apache.spark.sql.avro.{AvroDeserializer, AvroOptions, AvroSerializer,
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchemaUtils._
 import org.apache.spark.sql.execution.streaming.state.{AvroEncoderSpec, NoPrefixKeyStateEncoderSpec, PrefixKeyScanStateEncoderSpec, RangeKeyScanStateEncoderSpec, StateStoreColFamilySchema}
-import org.apache.spark.sql.types.{NullType, StructField, StructType}
+import org.apache.spark.sql.types.{BinaryType, BooleanType, ByteType, DataType, DoubleType, FloatType, IntegerType, LongType, NullType, ShortType, StructField, StructType}
 
 object StateStoreColumnFamilySchemaUtils {
 
   def apply(initializeAvroSerde: Boolean): StateStoreColumnFamilySchemaUtils =
     new StateStoreColumnFamilySchemaUtils(initializeAvroSerde)
+
+
+  def convertForRangeScan(schema: StructType): StructType = {
+    StructType(schema.fields.map { field =>
+      if (isFixedSize(field.dataType)) {
+        // Convert numeric types to BinaryType while preserving nullability
+        field.copy(dataType = BinaryType)
+      } else {
+        field
+      }
+    })
+  }
+
+  private def isFixedSize(dataType: DataType): Boolean = dataType match {
+    case _: ByteType | _: BooleanType | _: ShortType | _: IntegerType | _: LongType |
+         _: FloatType | _: DoubleType => true
+    case _ => false
+  }
 }
 
 /**
@@ -128,7 +146,8 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) {
   def getTtlStateSchema(
       stateName: String,
       keyEncoder: ExpressionEncoder[Any]): StateStoreColFamilySchema = {
-    val ttlKeySchema = getSingleKeyTTLAvroRowSchema(keyEncoder.schema)
+    val ttlKeySchema = StateStoreColumnFamilySchemaUtils.convertForRangeScan(
+      getSingleKeyTTLRowSchema(keyEncoder.schema))
     val ttlValSchema = StructType(
       Array(StructField("__dummy__", NullType)))
     StateStoreColFamilySchema(
@@ -177,6 +196,23 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) {
         StructType(keySchema.take(1)),
         valSchema,
         Some(StructType(keySchema.drop(1)))
+      ))
+  }
+
+  def getTimerStateSchemaForSecIndex(
+      stateName: String,
+      keySchema: StructType,
+      valSchema: StructType): StateStoreColFamilySchema = {
+    val avroKeySchema = StateStoreColumnFamilySchemaUtils.convertForRangeScan(keySchema)
+    StateStoreColFamilySchema(
+      stateName,
+      keySchema,
+      valSchema,
+      Some(RangeKeyScanStateEncoderSpec(keySchema, Seq(0))),
+      avroEnc = getAvroSerde(
+        StructType(avroKeySchema.take(1)),
+        valSchema,
+        Some(StructType(avroKeySchema.drop(1)))
       ))
   }
 }

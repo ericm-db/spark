@@ -43,11 +43,6 @@ object TransformWithStateKeyValueRowSchemaUtils {
       .add("expirationMs", LongType)
       .add("groupingKey", keySchema)
 
-  def getSingleKeyTTLAvroRowSchema(keySchema: StructType): StructType =
-    new StructType()
-      .add("expirationMs", BinaryType)
-      .add("groupingKey", keySchema)
-
   def getCompositeKeyTTLRowSchema(
       groupingKeySchema: StructType,
       userKeySchema: StructType): StructType =
