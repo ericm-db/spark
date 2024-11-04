@@ -280,7 +280,7 @@ class StatefulProcessorHandleImpl(
       valEncoder: Encoder[V]): MapState[K, V] = {
     verifyStateVarOperations("get_map_state", CREATED)
     val resultState = new MapStateImpl[K, V](store, stateName, keyEncoder,
-      userKeyEnc, valEncoder, metrics)
+      userKeyEnc, valEncoder, metrics, schemas(stateName).avroEnc)
     TWSMetricsUtils.incrementMetric(metrics, "numMapStateVars")
     resultState
   }

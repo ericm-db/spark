@@ -21,7 +21,7 @@ import org.apache.spark.sql.Encoder
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchemaUtils._
-import org.apache.spark.sql.execution.streaming.state.{PrefixKeyScanStateEncoderSpec, StateStore, StateStoreErrors, UnsafeRowPair}
+import org.apache.spark.sql.execution.streaming.state.{AvroEncoderSpec, PrefixKeyScanStateEncoderSpec, StateStore, StateStoreErrors, UnsafeRowPair}
 import org.apache.spark.sql.streaming.MapState
 import org.apache.spark.sql.types.StructType
 
@@ -42,7 +42,8 @@ class MapStateImpl[K, V](
     keyExprEnc: ExpressionEncoder[Any],
     userKeyEnc: Encoder[K],
     valEncoder: Encoder[V],
-    metrics: Map[String, SQLMetric] = Map.empty) extends MapState[K, V] with Logging {
+    metrics: Map[String, SQLMetric] = Map.empty,
+    avroEnc: Option[AvroEncoderSpec] = None) extends MapState[K, V] with Logging {
 
   // Pack grouping key and user key together as a prefixed composite key
   private val schemaForCompositeKeyRow: StructType = {
@@ -53,7 +54,7 @@ class MapStateImpl[K, V](
     keyExprEnc, userKeyEnc, valEncoder, stateName)
 
   store.createColFamilyIfAbsent(stateName, schemaForCompositeKeyRow, schemaForValueRow,
-    PrefixKeyScanStateEncoderSpec(schemaForCompositeKeyRow, 1))
+    PrefixKeyScanStateEncoderSpec(schemaForCompositeKeyRow, 1), avroEncoderSpec = avroEnc)
 
   /** Whether state exists or not. */
   override def exists(): Boolean = {

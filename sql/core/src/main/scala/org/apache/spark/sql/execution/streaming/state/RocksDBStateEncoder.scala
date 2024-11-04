@@ -256,6 +256,14 @@ class PrefixKeyScanStateEncoder(
     UnsafeProjection.create(refs)
   }
 
+  private val prefixKeySchema = StructType(keySchema.take(numColsPrefixKey))
+  private val prefixKeyAvroType = SchemaConverters.toAvroType(prefixKeySchema)
+  private val prefixKeyProj = UnsafeProjection.create(prefixKeySchema)
+
+  private val remainingKeySchema = StructType(keySchema.drop(numColsPrefixKey))
+  private val remainingKeyAvroType = SchemaConverters.toAvroType(remainingKeySchema)
+  private val remainingKeyProj = UnsafeProjection.create(remainingKeySchema)
+
   // This is quite simple to do - just bind sequentially, as we don't change the order.
   private val restoreKeyProjection: UnsafeProjection = UnsafeProjection.create(keySchema)
 
@@ -263,9 +271,24 @@ class PrefixKeyScanStateEncoder(
   private val joinedRowOnKey = new JoinedRow()
 
   override def encodeKey(row: UnsafeRow): Array[Byte] = {
-    val prefixKeyEncoded = encodeUnsafeRow(extractPrefixKey(row))
-    val remainingEncoded = encodeUnsafeRow(remainingKeyProjection(row))
-
+    val (prefixKeyEncoded, remainingEncoded) = if (avroEnc.isDefined) {
+      (
+        encodeUnsafeRow(
+          extractPrefixKey(row),
+          avroEnc.get.keySerializer,
+          prefixKeyAvroType,
+          out
+        ),
+        encodeUnsafeRow(
+          remainingKeyProjection(row),
+          avroEnc.get.userKeySerializer.get,
+          remainingKeyAvroType,
+          out
+        )
+      )
+    } else {
+      (encodeUnsafeRow(extractPrefixKey(row)), encodeUnsafeRow(remainingKeyProjection(row)))
+    }
     val (encodedBytes, startingOffset) = encodeColumnFamilyPrefix(
       prefixKeyEncoded.length + remainingEncoded.length + 4
     )
@@ -296,9 +319,25 @@ class PrefixKeyScanStateEncoder(
     Platform.copyMemory(keyBytes, decodeKeyStartOffset + 4 + prefixKeyEncodedLen,
       remainingKeyEncoded, Platform.BYTE_ARRAY_OFFSET, remainingKeyEncodedLen)
 
-    val prefixKeyDecoded = decodeToUnsafeRow(prefixKeyEncoded, numFields = numColsPrefixKey)
-    val remainingKeyDecoded = decodeToUnsafeRow(remainingKeyEncoded,
-      numFields = keySchema.length - numColsPrefixKey)
+    val (prefixKeyDecoded, remainingKeyDecoded) = if (avroEnc.isDefined) {
+      (
+        decodeToUnsafeRow(
+          prefixKeyEncoded,
+          avroEnc.get.keyDeserializer,
+          prefixKeyAvroType,
+          prefixKeyProj
+        ),
+        decodeToUnsafeRow(
+          remainingKeyEncoded,
+          avroEnc.get.userKeyDeserializer.get,
+          remainingKeyAvroType,
+          remainingKeyProj
+        )
+      )
+    } else {
+      (decodeToUnsafeRow(prefixKeyEncoded, numFields = numColsPrefixKey),
+        decodeToUnsafeRow(remainingKeyEncoded, numFields = keySchema.length - numColsPrefixKey))
+    }
 
     restoreKeyProjection(joinedRowOnKey.withLeft(prefixKeyDecoded).withRight(remainingKeyDecoded))
   }
@@ -308,7 +347,11 @@ class PrefixKeyScanStateEncoder(
   }
 
   override def encodePrefixKey(prefixKey: UnsafeRow): Array[Byte] = {
-    val prefixKeyEncoded = encodeUnsafeRow(prefixKey)
+    val prefixKeyEncoded = if (avroEnc.isDefined) {
+      encodeUnsafeRow(prefixKey, avroEnc.get.keySerializer, prefixKeyAvroType, out)
+    } else {
+      encodeUnsafeRow(prefixKey)
+    }
     val (prefix, startingOffset) = encodeColumnFamilyPrefix(
       prefixKeyEncoded.length + 4
     )
@@ -728,6 +771,7 @@ class NoPrefixKeyStateEncoder(
   private val usingAvroEncoding = avroEnc.isDefined
   private val keyRow = new UnsafeRow(keySchema.size)
   private val keyAvroType = SchemaConverters.toAvroType(keySchema)
+  private val keyProj = UnsafeProjection.create(keySchema)
 
   override def encodeKey(row: UnsafeRow): Array[Byte] = {
     if (!useColumnFamilies) {
@@ -736,13 +780,7 @@ class NoPrefixKeyStateEncoder(
       // If avroEnc is defined, we know that we need to use Avro to
       // encode this UnsafeRow to Avro bytes
       val bytesToEncode = if (usingAvroEncoding) {
-        val avroData = avroEnc.get.keySerializer.serialize(row)
-        out.reset()
-        val encoder = EncoderFactory.get().directBinaryEncoder(out, null)
-        val writer = new GenericDatumWriter[Any](keyAvroType)
-        writer.write(avroData, encoder)
-        encoder.flush()
-        out.toByteArray
+        encodeUnsafeRow(row, avroEnc.get.keySerializer, keyAvroType, out)
       } else row.getBytes
       val (encodedBytes, startingOffset) = encodeColumnFamilyPrefix(
         bytesToEncode.length +
@@ -767,11 +805,25 @@ class NoPrefixKeyStateEncoder(
     if (useColumnFamilies) {
       if (keyBytes != null) {
         // Platform.BYTE_ARRAY_OFFSET is the recommended way refer to the 1st offset. See Platform.
-        keyRow.pointTo(
-          keyBytes,
-          decodeKeyStartOffset + STATE_ENCODING_NUM_VERSION_BYTES,
-          keyBytes.length - STATE_ENCODING_NUM_VERSION_BYTES - VIRTUAL_COL_FAMILY_PREFIX_BYTES)
-        keyRow
+        if (usingAvroEncoding) {
+          val avroBytes = new Array[Byte](
+            keyBytes.length - STATE_ENCODING_NUM_VERSION_BYTES - VIRTUAL_COL_FAMILY_PREFIX_BYTES)
+          System.arraycopy(
+            keyBytes,
+            decodeKeyStartOffset + STATE_ENCODING_NUM_VERSION_BYTES,
+            avroBytes,
+            0,
+            avroBytes.length
+          )
+          decodeToUnsafeRow(
+            keyBytes, avroEnc.get.keyDeserializer, keyAvroType, keyProj)
+        } else {
+          keyRow.pointTo(
+            keyBytes,
+            decodeKeyStartOffset + STATE_ENCODING_NUM_VERSION_BYTES,
+            keyBytes.length - STATE_ENCODING_NUM_VERSION_BYTES - VIRTUAL_COL_FAMILY_PREFIX_BYTES)
+          keyRow
+        }
       } else {
         null
       }

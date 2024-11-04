@@ -109,7 +109,7 @@ class TransformWithMapStateSuite extends StreamTest
     }
   }
 
-  test("Test retrieving value with non-existing user key") {
+  testWithEncodingTypes("Test retrieving value with non-existing user key") {
     withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
       classOf[RocksDBStateStoreProvider].getName) {
 
@@ -133,7 +133,7 @@ class TransformWithMapStateSuite extends StreamTest
     }
   }
 
-  test("Test put value with null value") {
+  testWithEncodingTypes("Test put value with null value") {
     withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
       classOf[RocksDBStateStoreProvider].getName) {
 
@@ -157,7 +157,7 @@ class TransformWithMapStateSuite extends StreamTest
     }
   }
 
-  test("Test map state correctness") {
+  testWithEncodingTypes("Test map state correctness") {
     withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
       classOf[RocksDBStateStoreProvider].getName) {
       val inputData = MemoryStream[InputMapRow]

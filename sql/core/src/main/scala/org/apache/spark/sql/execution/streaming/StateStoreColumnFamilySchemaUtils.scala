@@ -43,7 +43,10 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) {
    * for a particular key and value schema.
    */
   private def getAvroSerde(
-      keySchema: StructType, valSchema: StructType): Option[AvroEncoderSpec] = {
+      keySchema: StructType,
+      valSchema: StructType,
+      userKeySchema: Option[StructType] = None
+  ): Option[AvroEncoderSpec] = {
     if (initializeAvroSerde) {
       val avroType = SchemaConverters.toAvroType(valSchema)
       val avroOptions = AvroOptions(Map.empty)
@@ -56,7 +59,18 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) {
       val valueDeserializer = new AvroDeserializer(avroType, valSchema,
         avroOptions.datetimeRebaseModeInRead, avroOptions.useStableIdForUnionType,
         avroOptions.stableIdPrefixForUnionType, avroOptions.recursiveFieldMaxDepth)
-      Some(AvroEncoderSpec(keySer, keyDe, valueSerializer, valueDeserializer))
+      val (userKeySerializer, userKeyDeserializer) = if (userKeySchema.isDefined) {
+        val userKeyAvroType = SchemaConverters.toAvroType(userKeySchema.get)
+        val ukSer = new AvroSerializer(userKeySchema.get, userKeyAvroType, nullable = false)
+        val ukDe = new AvroDeserializer(userKeyAvroType, userKeySchema.get,
+          avroOptions.datetimeRebaseModeInRead, avroOptions.useStableIdForUnionType,
+          avroOptions.stableIdPrefixForUnionType, avroOptions.recursiveFieldMaxDepth)
+        (Some(ukSer), Some(ukDe))
+      } else {
+        (None, None)
+      }
+      Some(AvroEncoderSpec(
+        keySer, keyDe, valueSerializer, valueDeserializer, userKeySerializer, userKeyDeserializer))
     } else {
       None
     }
@@ -97,12 +111,19 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) {
       valEncoder: Encoder[V],
       hasTtl: Boolean): StateStoreColFamilySchema = {
     val compositeKeySchema = getCompositeKeySchema(keyEncoder.schema, userKeyEnc.schema)
+    val valSchema = getValueSchemaWithTTL(valEncoder.schema, hasTtl)
     StateStoreColFamilySchema(
       stateName,
       compositeKeySchema,
       getValueSchemaWithTTL(valEncoder.schema, hasTtl),
       Some(PrefixKeyScanStateEncoderSpec(compositeKeySchema, 1)),
-      Some(userKeyEnc.schema))
+      Some(userKeyEnc.schema),
+      avroEnc = getAvroSerde(
+        StructType(compositeKeySchema.take(1)),
+        valSchema,
+        Some(StructType(compositeKeySchema.drop(1)))
+      )
+    )
   }
 
   def getTimerStateSchema(
