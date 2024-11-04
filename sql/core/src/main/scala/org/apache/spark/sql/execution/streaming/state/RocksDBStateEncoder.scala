@@ -409,7 +409,7 @@ class RangeKeyScanStateEncoder(
     useColumnFamilies: Boolean = false,
     virtualColFamilyId: Option[Short] = None,
     avroEnc: Option[AvroEncoderSpec] = None)
-  extends RocksDBKeyStateEncoderBase(useColumnFamilies, virtualColFamilyId) {
+  extends RocksDBKeyStateEncoderBase(useColumnFamilies, virtualColFamilyId) with Logging {
 
   import RocksDBStateEncoder._
 

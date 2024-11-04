@@ -56,6 +56,14 @@ object TransformWithStateKeyValueRowSchemaUtils {
       .add("groupingKey", new StructType(groupingKeySchema.fields))
       .add("userKey", new StructType(userKeySchema.fields))
 
+  def getCompositeKeyTTLAvroRowSchema(
+      groupingKeySchema: StructType,
+      userKeySchema: StructType): StructType =
+    new StructType()
+      .add("expirationMs", BinaryType)
+      .add("groupingKey", new StructType(groupingKeySchema.fields))
+      .add("userKey", new StructType(userKeySchema.fields))
+
   def getValueSchemaWithTTL(schema: StructType, hasTTL: Boolean): StructType = {
     if (hasTTL) {
       new StructType().add("value", schema)

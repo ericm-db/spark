@@ -21,7 +21,7 @@ import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.catalyst.expressions.UnsafeRow
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchemaUtils._
-import org.apache.spark.sql.execution.streaming.state.{NoPrefixKeyStateEncoderSpec, StateStore, StateStoreErrors}
+import org.apache.spark.sql.execution.streaming.state.{AvroEncoderSpec, NoPrefixKeyStateEncoderSpec, StateStore, StateStoreErrors}
 import org.apache.spark.sql.streaming.{ListState, TTLConfig}
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.util.NextIterator
@@ -46,8 +46,10 @@ class ListStateImplWithTTL[S](
     valEncoder: Encoder[S],
     ttlConfig: TTLConfig,
     batchTimestampMs: Long,
-    metrics: Map[String, SQLMetric] = Map.empty)
-  extends SingleKeyTTLStateImpl(stateName, store, keyExprEnc, batchTimestampMs)
+    metrics: Map[String, SQLMetric] = Map.empty,
+    avroEnc: Option[AvroEncoderSpec] = None,
+    ttlAvroEnc: Option[AvroEncoderSpec] = None)
+  extends SingleKeyTTLStateImpl(stateName, store, keyExprEnc, batchTimestampMs, ttlAvroEnc)
   with ListStateMetricsImpl
   with ListState[S] {
 
@@ -66,7 +68,8 @@ class ListStateImplWithTTL[S](
   private def initialize(): Unit = {
     store.createColFamilyIfAbsent(stateName, keyExprEnc.schema,
       getValueSchemaWithTTL(valEncoder.schema, true),
-      NoPrefixKeyStateEncoderSpec(keyExprEnc.schema), useMultipleValuesPerKey = true)
+      NoPrefixKeyStateEncoderSpec(keyExprEnc.schema), useMultipleValuesPerKey = true,
+      avroEncoderSpec = avroEnc)
   }
 
   /** Whether state exists or not. */

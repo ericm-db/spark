@@ -268,7 +268,8 @@ class StatefulProcessorHandleImpl(
 
     assert(batchTimestampMs.isDefined)
     val listStateWithTTL = new ListStateImplWithTTL[T](store, stateName,
-      keyEncoder, valEncoder, ttlConfig, batchTimestampMs.get, metrics)
+      keyEncoder, valEncoder, ttlConfig, batchTimestampMs.get, metrics,
+      schemas(stateName).avroEnc, schemas("$ttl_" + stateName).avroEnc)
     TWSMetricsUtils.incrementMetric(metrics, "numListStateWithTTLVars")
     ttlStates.add(listStateWithTTL)
 
@@ -296,7 +297,8 @@ class StatefulProcessorHandleImpl(
 
     assert(batchTimestampMs.isDefined)
     val mapStateWithTTL = new MapStateImplWithTTL[K, V](store, stateName, keyEncoder, userKeyEnc,
-      valEncoder, ttlConfig, batchTimestampMs.get, metrics)
+      valEncoder, ttlConfig, batchTimestampMs.get, metrics,
+      schemas(stateName).avroEnc, schemas("$ttl_" + stateName).avroEnc)
     TWSMetricsUtils.incrementMetric(metrics, "numMapStateWithTTLVars")
     ttlStates.add(mapStateWithTTL)
 
@@ -412,8 +414,11 @@ class DriverStatefulProcessorHandleImpl(
     verifyStateVarOperations("get_list_state", PRE_INIT)
     val colFamilySchema = schemaUtils.
       getListStateSchema(stateName, keyExprEnc, valEncoder, true)
+    val ttlColFamilyName = "$ttl_" + stateName
+    val ttlColFamilySchema = schemaUtils.getTtlStateSchema(ttlColFamilyName, keyExprEnc)
     checkIfDuplicateVariableDefined(stateName)
     columnFamilySchemas.put(stateName, colFamilySchema)
+    columnFamilySchemas.put(ttlColFamilyName, ttlColFamilySchema)
     val stateVariableInfo = TransformWithStateVariableUtils.
       getListState(stateName, ttlEnabled = true)
     stateVariableInfos.put(stateName, stateVariableInfo)
@@ -444,6 +449,10 @@ class DriverStatefulProcessorHandleImpl(
     val colFamilySchema = schemaUtils.
       getMapStateSchema(stateName, keyExprEnc, userKeyEnc, valEncoder, true)
     columnFamilySchemas.put(stateName, colFamilySchema)
+    val ttlColFamilyName = "$ttl_" + stateName
+    val ttlColFamilySchema = schemaUtils.getTtlStateSchema(
+      ttlColFamilyName, keyExprEnc, userKeyEnc.schema)
+    columnFamilySchemas.put(ttlColFamilyName, ttlColFamilySchema)
     val stateVariableInfo = TransformWithStateVariableUtils.
       getMapState(stateName, ttlEnabled = true)
     stateVariableInfos.put(stateName, stateVariableInfo)

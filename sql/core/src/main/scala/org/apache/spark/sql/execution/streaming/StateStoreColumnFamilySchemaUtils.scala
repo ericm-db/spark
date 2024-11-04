@@ -144,6 +144,26 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) {
     )
   }
 
+  def getTtlStateSchema(
+      stateName: String,
+      keyEncoder: ExpressionEncoder[Any],
+      userKeySchema: StructType): StateStoreColFamilySchema = {
+    val ttlKeySchema = getCompositeKeyTTLAvroRowSchema(keyEncoder.schema, userKeySchema)
+    val ttlValSchema = StructType(
+      Array(StructField("__dummy__", NullType)))
+    StateStoreColFamilySchema(
+      stateName,
+      ttlKeySchema,
+      ttlValSchema,
+      Some(RangeKeyScanStateEncoderSpec(ttlKeySchema, Seq(0))),
+      avroEnc = getAvroSerde(
+        StructType(ttlKeySchema.take(1)),
+        ttlValSchema,
+        Some(StructType(ttlKeySchema.drop(1)))
+      )
+    )
+  }
+
   def getTimerStateSchema(
       stateName: String,
       keySchema: StructType,
@@ -152,6 +172,11 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) {
       stateName,
       keySchema,
       valSchema,
-      Some(PrefixKeyScanStateEncoderSpec(keySchema, 1)))
+      Some(PrefixKeyScanStateEncoderSpec(keySchema, 1)),
+      avroEnc = getAvroSerde(
+        StructType(keySchema.take(1)),
+        valSchema,
+        Some(StructType(keySchema.drop(1)))
+      ))
   }
 }
