@@ -23,7 +23,7 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.catalyst.expressions.{UnsafeProjection, UnsafeRow}
 import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchemaUtils._
-import org.apache.spark.sql.execution.streaming.state.{RangeKeyScanStateEncoderSpec, StateStore}
+import org.apache.spark.sql.execution.streaming.state.{AvroEncoderSpec, RangeKeyScanStateEncoderSpec, StateStore}
 import org.apache.spark.sql.types._
 
 object StateTTLSchema {
@@ -80,7 +80,8 @@ abstract class SingleKeyTTLStateImpl(
     stateName: String,
     store: StateStore,
     keyExprEnc: ExpressionEncoder[Any],
-    ttlExpirationMs: Long)
+    ttlExpirationMs: Long,
+    avroEnc: Option[AvroEncoderSpec] = None)
   extends TTLState {
 
   import org.apache.spark.sql.execution.streaming.StateTTLSchema._
@@ -94,7 +95,7 @@ abstract class SingleKeyTTLStateImpl(
     UnsafeProjection.create(Array[DataType](NullType)).apply(InternalRow.apply(null))
 
   store.createColFamilyIfAbsent(ttlColumnFamilyName, keySchema, TTL_VALUE_ROW_SCHEMA,
-    RangeKeyScanStateEncoderSpec(keySchema, Seq(0)), isInternal = true)
+    RangeKeyScanStateEncoderSpec(keySchema, Seq(0)), isInternal = true, avroEncoderSpec = avroEnc)
 
   /**
    * This function will be called when clear() on State Variables

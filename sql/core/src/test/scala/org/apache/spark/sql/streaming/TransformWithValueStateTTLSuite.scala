@@ -195,7 +195,7 @@ class TransformWithValueStateTTLSuite extends TransformWithStateTTLTest {
 
   override def getStateTTLMetricName: String = "numValueStateWithTTLVars"
 
-  test("validate multiple value states") {
+  testWithEncodingTypes("validate multiple value states") {
     withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
       classOf[RocksDBStateStoreProvider].getName) {
       val ttlKey = "k1"

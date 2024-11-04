@@ -157,7 +157,8 @@ class StatefulProcessorHandleImpl(
 
     assert(batchTimestampMs.isDefined)
     val valueStateWithTTL = new ValueStateImplWithTTL[T](store, stateName,
-      keyEncoder, valEncoder, ttlConfig, batchTimestampMs.get, metrics)
+      keyEncoder, valEncoder, ttlConfig, batchTimestampMs.get, metrics,
+      schemas(stateName).avroEnc, schemas("$ttl_" + stateName).avroEnc)
     ttlStates.add(valueStateWithTTL)
     TWSMetricsUtils.incrementMetric(metrics, "numValueStateWithTTLVars")
 
@@ -381,8 +382,11 @@ class DriverStatefulProcessorHandleImpl(
     verifyStateVarOperations("get_value_state", PRE_INIT)
     val colFamilySchema = schemaUtils.
       getValueStateSchema(stateName, keyExprEnc, valEncoder, true)
+    val ttlColFamilyName = "$ttl_" + stateName
+    val ttlColFamilySchema = schemaUtils.getTtlStateSchema(ttlColFamilyName, keyExprEnc)
     checkIfDuplicateVariableDefined(stateName)
     columnFamilySchemas.put(stateName, colFamilySchema)
+    columnFamilySchemas.put(ttlColFamilyName, ttlColFamilySchema)
     val stateVariableInfo = TransformWithStateVariableUtils.
       getValueState(stateName, ttlEnabled = true)
     stateVariableInfos.put(stateName, stateVariableInfo)

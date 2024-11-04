@@ -21,7 +21,7 @@ import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.catalyst.expressions.UnsafeRow
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchemaUtils._
-import org.apache.spark.sql.execution.streaming.state.{NoPrefixKeyStateEncoderSpec, StateStore}
+import org.apache.spark.sql.execution.streaming.state.{AvroEncoderSpec, NoPrefixKeyStateEncoderSpec, StateStore}
 import org.apache.spark.sql.streaming.{TTLConfig, ValueState}
 
 /**
@@ -44,9 +44,11 @@ class ValueStateImplWithTTL[S](
     valEncoder: Encoder[S],
     ttlConfig: TTLConfig,
     batchTimestampMs: Long,
-    metrics: Map[String, SQLMetric] = Map.empty)
+    metrics: Map[String, SQLMetric] = Map.empty,
+    avroEnc: Option[AvroEncoderSpec] = None,
+    ttlAvroEnc: Option[AvroEncoderSpec] = None)
   extends SingleKeyTTLStateImpl(
-    stateName, store, keyExprEnc, batchTimestampMs) with ValueState[S] {
+    stateName, store, keyExprEnc, batchTimestampMs, ttlAvroEnc) with ValueState[S] {
 
   private val stateTypesEncoder = StateTypesEncoder(keyExprEnc, valEncoder,
     stateName, hasTtl = true)
@@ -58,7 +60,7 @@ class ValueStateImplWithTTL[S](
   private def initialize(): Unit = {
     store.createColFamilyIfAbsent(stateName,
       keyExprEnc.schema, getValueSchemaWithTTL(valEncoder.schema, true),
-      NoPrefixKeyStateEncoderSpec(keyExprEnc.schema))
+      NoPrefixKeyStateEncoderSpec(keyExprEnc.schema), avroEncoderSpec = avroEnc)
   }
 
   /** Function to check if state exists. Returns true if present and false otherwise */

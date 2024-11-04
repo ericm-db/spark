@@ -21,7 +21,7 @@ import java.sql.Timestamp
 import java.time.Duration
 
 import org.apache.spark.sql.execution.streaming.MemoryStream
-import org.apache.spark.sql.execution.streaming.state.RocksDBStateStoreProvider
+import org.apache.spark.sql.execution.streaming.state.{AlsoTestWithChangelogCheckpointingEnabled, RocksDBStateStoreProvider}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.streaming.util.StreamManualClock
 
@@ -41,14 +41,14 @@ case class OutputEvent(
  * Test suite base for TransformWithState with TTL support.
  */
 abstract class TransformWithStateTTLTest
-  extends StreamTest {
+  extends StreamTest with AlsoTestWithChangelogCheckpointingEnabled {
   import testImplicits._
 
   def getProcessor(ttlConfig: TTLConfig): StatefulProcessor[String, InputEvent, OutputEvent]
 
   def getStateTTLMetricName: String
 
-  test("validate state is evicted at ttl expiry") {
+  testWithEncodingTypes("validate state is evicted at ttl expiry") {
     withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
       classOf[RocksDBStateStoreProvider].getName) {
       withTempDir { dir =>
@@ -125,7 +125,7 @@ abstract class TransformWithStateTTLTest
     }
   }
 
-  test("validate state update updates the expiration timestamp") {
+  testWithEncodingTypes("validate state update updates the expiration timestamp") {
     withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
       classOf[RocksDBStateStoreProvider].getName) {
       val inputStream = MemoryStream[InputEvent]
@@ -187,7 +187,7 @@ abstract class TransformWithStateTTLTest
     }
   }
 
-  test("validate state is evicted at ttl expiry for no data batch") {
+  testWithEncodingTypes("validate state is evicted at ttl expiry for no data batch") {
     withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
     classOf[RocksDBStateStoreProvider].getName) {
       val inputStream = MemoryStream[InputEvent]
@@ -238,7 +238,7 @@ abstract class TransformWithStateTTLTest
     }
   }
 
-  test("validate only expired keys are removed from the state") {
+  testWithEncodingTypes("validate only expired keys are removed from the state") {
     withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
       classOf[RocksDBStateStoreProvider].getName,
       SQLConf.SHUFFLE_PARTITIONS.key -> "1") {
