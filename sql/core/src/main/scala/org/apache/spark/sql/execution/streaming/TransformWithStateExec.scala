@@ -693,14 +693,10 @@ case class TransformWithStateExec(
   private def validateTimeMode(): Unit = {
     timeMode match {
       case ProcessingTime =>
-        if (batchTimestampMs.isEmpty) {
-          StateStoreErrors.missingTimeValues(timeMode.toString)
-        }
+        TransformWithStateVariableUtils.validateTimeMode(timeMode, batchTimestampMs)
 
       case EventTime =>
-        if (eventTimeWatermarkForEviction.isEmpty) {
-          StateStoreErrors.missingTimeValues(timeMode.toString)
-        }
+        TransformWithStateVariableUtils.validateTimeMode(timeMode, eventTimeWatermarkForEviction)
 
       case _ =>
     }
