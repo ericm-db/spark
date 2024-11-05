@@ -35,6 +35,10 @@ import org.apache.spark.sql.streaming.{TTLConfig, ValueState}
  * @param ttlConfig  - TTL configuration for values  stored in this state
  * @param batchTimestampMs - current batch processing timestamp.
  * @param metrics - metrics to be updated as part of stateful processing
+ * @param avroEnc - optional Avro serializer and deserializer for this state variable that
+ *                is used by the StateStore to encode state in Avro format
+ * @param ttlAvroEnc - optional Avro serializer and deserializer for TTL state that
+ *                is used by the StateStore to encode state in Avro format
  * @tparam S - data type of object that will be stored
  */
 class ValueStateImplWithTTL[S](

@@ -413,7 +413,6 @@ class RangeKeyScanStateEncoder(
   extends RocksDBKeyStateEncoderBase(useColumnFamilies, virtualColFamilyId) with Logging {
 
   import RocksDBStateEncoder._
-  logError(s"### avroEnc.isDefined: ${avroEnc.isDefined}")
 
   private val rangeScanKeyFieldsWithOrdinal: Seq[(StructField, Int)] = {
     orderingOrdinals.map { ordinal =>
@@ -829,7 +828,7 @@ class NoPrefixKeyStateEncoder(
   import RocksDBStateEncoder._
 
   // Reusable objects
-  private val usingAvroEncoding = usingAvroEncoding
+  private val usingAvroEncoding = avroEnc.isDefined
   private val keyRow = new UnsafeRow(keySchema.size)
   private val keyAvroType = SchemaConverters.toAvroType(keySchema)
   private val keyProj = UnsafeProjection.create(keySchema)
@@ -919,7 +918,7 @@ class MultiValuedStateEncoder(
 
   import RocksDBStateEncoder._
 
-  private val usingAvroEncoding = usingAvroEncoding
+  private val usingAvroEncoding = avroEnc.isDefined
   // Reusable objects
   private val out = new ByteArrayOutputStream
   private val valueRow = new UnsafeRow(valueSchema.size)

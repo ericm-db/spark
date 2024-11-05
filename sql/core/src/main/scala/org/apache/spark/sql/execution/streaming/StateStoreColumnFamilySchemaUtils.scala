@@ -29,9 +29,19 @@ object StateStoreColumnFamilySchemaUtils {
     new StateStoreColumnFamilySchemaUtils(initializeAvroSerde)
 
 
-  def convertForRangeScan(schema: StructType): StructType = {
-    StructType(schema.fields.map { field =>
-      if (isFixedSize(field.dataType)) {
+  /**
+   * Avro uses zig-zag encoding for some fixed-length types, like Longs and Ints. For range scans
+   * we want to use big-endian encoding, so we need to convert the source schema to replace these
+   * types with BinaryType.
+   *
+   * @param schema The schema to convert
+   * @param ordinals If non-empty, only convert fields at these ordinals.
+   *                 If empty, convert all fields.
+   */
+  def convertForRangeScan(schema: StructType, ordinals: Seq[Int] = Seq.empty): StructType = {
+    val ordinalSet = ordinals.toSet
+    StructType(schema.fields.zipWithIndex.map { case (field, idx) =>
+      if ((ordinals.isEmpty || ordinalSet.contains(idx)) && isFixedSize(field.dataType)) {
         // Convert numeric types to BinaryType while preserving nullability
         field.copy(dataType = BinaryType)
       } else {
@@ -44,6 +54,10 @@ object StateStoreColumnFamilySchemaUtils {
     case _: ByteType | _: BooleanType | _: ShortType | _: IntegerType | _: LongType |
          _: FloatType | _: DoubleType => true
     case _ => false
+  }
+
+  def getTtlColFamilyName(stateName: String): String = {
+    "$ttl_" + stateName
   }
 }
 
@@ -147,7 +161,7 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) {
       stateName: String,
       keyEncoder: ExpressionEncoder[Any]): StateStoreColFamilySchema = {
     val ttlKeySchema = StateStoreColumnFamilySchemaUtils.convertForRangeScan(
-      getSingleKeyTTLRowSchema(keyEncoder.schema))
+      getSingleKeyTTLRowSchema(keyEncoder.schema), Seq(0))
     val ttlValSchema = StructType(
       Array(StructField("__dummy__", NullType)))
     StateStoreColFamilySchema(
@@ -167,7 +181,8 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) {
       stateName: String,
       keyEncoder: ExpressionEncoder[Any],
       userKeySchema: StructType): StateStoreColFamilySchema = {
-    val ttlKeySchema = getCompositeKeyTTLAvroRowSchema(keyEncoder.schema, userKeySchema)
+    val ttlKeySchema = StateStoreColumnFamilySchemaUtils.convertForRangeScan(
+      getCompositeKeyTTLRowSchema(keyEncoder.schema, userKeySchema), Seq(0))
     val ttlValSchema = StructType(
       Array(StructField("__dummy__", NullType)))
     StateStoreColFamilySchema(
@@ -203,7 +218,8 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) {
       stateName: String,
       keySchema: StructType,
       valSchema: StructType): StateStoreColFamilySchema = {
-    val avroKeySchema = StateStoreColumnFamilySchemaUtils.convertForRangeScan(keySchema)
+    val avroKeySchema = StateStoreColumnFamilySchemaUtils.
+      convertForRangeScan(keySchema, Seq(0))
     StateStoreColFamilySchema(
       stateName,
       keySchema,

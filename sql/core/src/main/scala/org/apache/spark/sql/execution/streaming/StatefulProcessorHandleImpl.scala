@@ -27,6 +27,7 @@ import org.apache.spark.sql.Encoder
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.execution.streaming.StatefulProcessorHandleState.PRE_INIT
+import org.apache.spark.sql.execution.streaming.StateStoreColumnFamilySchemaUtils.getTtlColFamilyName
 import org.apache.spark.sql.execution.streaming.state._
 import org.apache.spark.sql.streaming.{ListState, MapState, QueryInfo, TimeMode, TTLConfig, ValueState}
 import org.apache.spark.util.Utils
@@ -158,7 +159,7 @@ class StatefulProcessorHandleImpl(
     assert(batchTimestampMs.isDefined)
     val valueStateWithTTL = new ValueStateImplWithTTL[T](store, stateName,
       keyEncoder, valEncoder, ttlConfig, batchTimestampMs.get, metrics,
-      schemas(stateName).avroEnc, schemas("$ttl_" + stateName).avroEnc)
+      schemas(stateName).avroEnc, schemas(getTtlColFamilyName(stateName)).avroEnc)
     ttlStates.add(valueStateWithTTL)
     TWSMetricsUtils.incrementMetric(metrics, "numValueStateWithTTLVars")
 
@@ -275,7 +276,7 @@ class StatefulProcessorHandleImpl(
     assert(batchTimestampMs.isDefined)
     val listStateWithTTL = new ListStateImplWithTTL[T](store, stateName,
       keyEncoder, valEncoder, ttlConfig, batchTimestampMs.get, metrics,
-      schemas(stateName).avroEnc, schemas("$ttl_" + stateName).avroEnc)
+      schemas(stateName).avroEnc, schemas(getTtlColFamilyName(stateName)).avroEnc)
     TWSMetricsUtils.incrementMetric(metrics, "numListStateWithTTLVars")
     ttlStates.add(listStateWithTTL)
 
@@ -304,7 +305,7 @@ class StatefulProcessorHandleImpl(
     assert(batchTimestampMs.isDefined)
     val mapStateWithTTL = new MapStateImplWithTTL[K, V](store, stateName, keyEncoder, userKeyEnc,
       valEncoder, ttlConfig, batchTimestampMs.get, metrics,
-      schemas(stateName).avroEnc, schemas("$ttl_" + stateName).avroEnc)
+      schemas(stateName).avroEnc, schemas(getTtlColFamilyName(stateName)).avroEnc)
     TWSMetricsUtils.incrementMetric(metrics, "numMapStateWithTTLVars")
     ttlStates.add(mapStateWithTTL)
 
@@ -396,7 +397,7 @@ class DriverStatefulProcessorHandleImpl(
     verifyStateVarOperations("get_value_state", PRE_INIT)
     val colFamilySchema = schemaUtils.
       getValueStateSchema(stateName, keyExprEnc, valEncoder, true)
-    val ttlColFamilyName = "$ttl_" + stateName
+    val ttlColFamilyName = getTtlColFamilyName(stateName)
     val ttlColFamilySchema = schemaUtils.getTtlStateSchema(ttlColFamilyName, keyExprEnc)
     checkIfDuplicateVariableDefined(stateName)
     columnFamilySchemas.put(stateName, colFamilySchema)
@@ -426,7 +427,7 @@ class DriverStatefulProcessorHandleImpl(
     verifyStateVarOperations("get_list_state", PRE_INIT)
     val colFamilySchema = schemaUtils.
       getListStateSchema(stateName, keyExprEnc, valEncoder, true)
-    val ttlColFamilyName = "$ttl_" + stateName
+    val ttlColFamilyName = getTtlColFamilyName(stateName)
     val ttlColFamilySchema = schemaUtils.getTtlStateSchema(ttlColFamilyName, keyExprEnc)
     checkIfDuplicateVariableDefined(stateName)
     columnFamilySchemas.put(stateName, colFamilySchema)
@@ -461,7 +462,7 @@ class DriverStatefulProcessorHandleImpl(
     val colFamilySchema = schemaUtils.
       getMapStateSchema(stateName, keyExprEnc, userKeyEnc, valEncoder, true)
     columnFamilySchemas.put(stateName, colFamilySchema)
-    val ttlColFamilyName = "$ttl_" + stateName
+    val ttlColFamilyName = getTtlColFamilyName(stateName)
     val ttlColFamilySchema = schemaUtils.getTtlStateSchema(
       ttlColFamilyName, keyExprEnc, userKeyEnc.schema)
     columnFamilySchemas.put(ttlColFamilyName, ttlColFamilySchema)

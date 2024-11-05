@@ -37,6 +37,10 @@ import org.apache.spark.util.NextIterator
  * @param ttlConfig  - the ttl configuration (time to live duration etc.)
  * @param batchTimestampMs - current batch processing timestamp.
  * @param metrics - metrics to be updated as part of stateful processing
+ * @param avroEnc - optional Avro serializer and deserializer for this state variable that
+ *                is used by the StateStore to encode state in Avro format
+ * @param ttlAvroEnc - optional Avro serializer and deserializer for TTL state that
+ *                is used by the StateStore to encode state in Avro format
  * @tparam K - type of key for map state variable
  * @tparam V - type of value for map state variable
  * @return - instance of MapState of type [K,V] that can be used to store state persistently
