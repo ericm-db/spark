@@ -17,7 +17,6 @@
 package org.apache.spark.sql.execution.streaming
 
 import org.apache.spark.internal.Logging
-import org.apache.spark.sql.Encoder
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchemaUtils._
@@ -42,8 +41,8 @@ class MapStateImpl[K, V](
     store: StateStore,
     stateName: String,
     keyExprEnc: ExpressionEncoder[Any],
-    userKeyEnc: Encoder[K],
-    valEncoder: Encoder[V],
+    userKeyEnc: ExpressionEncoder[Any],
+    valEncoder: ExpressionEncoder[Any],
     metrics: Map[String, SQLMetric] = Map.empty,
     avroEnc: Option[AvroEncoderSpec] = None) extends MapState[K, V] with Logging {
 
@@ -70,7 +69,7 @@ class MapStateImpl[K, V](
     val unsafeRowValue = store.get(encodedCompositeKey, stateName)
 
     if (unsafeRowValue == null) return null.asInstanceOf[V]
-    stateTypesEncoder.decodeValue(unsafeRowValue)
+    stateTypesEncoder.decodeValue(unsafeRowValue).asInstanceOf[V]
   }
 
   /** Check if the user key is contained in the map */
@@ -95,8 +94,8 @@ class MapStateImpl[K, V](
     store.prefixScan(encodedGroupingKey, stateName)
       .map {
         case iter: UnsafeRowPair =>
-          (stateTypesEncoder.decodeCompositeKey(iter.key),
-            stateTypesEncoder.decodeValue(iter.value))
+          (stateTypesEncoder.decodeCompositeKey(iter.key).asInstanceOf[K],
+            stateTypesEncoder.decodeValue(iter.value).asInstanceOf[V])
       }
   }
 
