@@ -237,7 +237,8 @@ class StatefulProcessorHandleImpl(
       validateTTLConfig(ttlConfig, stateName)
       assert(batchTimestampMs.isDefined)
       val valueStateWithTTL = new ValueStateImplWithTTL[T](store, stateName,
-        keyEncoder, stateEncoder, ttlConfig, batchTimestampMs.get, metrics)
+        keyEncoder, stateEncoder, ttlConfig, batchTimestampMs.get, metrics,
+        schemas(stateName).avroEnc, schemas(getTtlColFamilyName(stateName)).avroEnc)
       ttlStates.add(valueStateWithTTL)
       TWSMetricsUtils.incrementMetric(metrics, "numValueStateWithTTLVars")
       valueStateWithTTL
@@ -286,7 +287,8 @@ class StatefulProcessorHandleImpl(
       validateTTLConfig(ttlConfig, stateName)
       assert(batchTimestampMs.isDefined)
       val listStateWithTTL = new ListStateImplWithTTL[T](store, stateName,
-        keyEncoder, stateEncoder, ttlConfig, batchTimestampMs.get, metrics)
+        keyEncoder, stateEncoder, ttlConfig, batchTimestampMs.get, metrics,
+        schemas(stateName).avroEnc, schemas(getTtlColFamilyName(stateName)).avroEnc)
       TWSMetricsUtils.incrementMetric(metrics, "numListStateWithTTLVars")
       ttlStates.add(listStateWithTTL)
       listStateWithTTL
@@ -324,7 +326,8 @@ class StatefulProcessorHandleImpl(
       validateTTLConfig(ttlConfig, stateName)
       assert(batchTimestampMs.isDefined)
       val mapStateWithTTL = new MapStateImplWithTTL[K, V](store, stateName, keyEncoder, userKeyEnc,
-        valEncoder, ttlConfig, batchTimestampMs.get, metrics)
+        valEncoder, ttlConfig, batchTimestampMs.get, metrics,
+        schemas(stateName).avroEnc, schemas(getTtlColFamilyName(stateName)).avroEnc)
       TWSMetricsUtils.incrementMetric(metrics, "numMapStateWithTTLVars")
       ttlStates.add(mapStateWithTTL)
       mapStateWithTTL
