@@ -27,6 +27,7 @@ import org.apache.spark.sql.Encoder
 import org.apache.spark.sql.catalyst.encoders.{encoderFor, ExpressionEncoder}
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.execution.streaming.StatefulProcessorHandleState.PRE_INIT
+import org.apache.spark.sql.execution.streaming.StateStoreColumnFamilySchemaUtils.getTtlColFamilyName
 import org.apache.spark.sql.execution.streaming.state._
 import org.apache.spark.sql.streaming.{ListState, MapState, QueryInfo, TimeMode, TTLConfig, ValueState}
 import org.apache.spark.util.Utils
@@ -140,7 +141,13 @@ class StatefulProcessorHandleImpl(
 
   override def getQueryInfo(): QueryInfo = currQueryInfo
 
-  private lazy val timerState = new TimerStateImpl(store, timeMode, keyEncoder)
+  private lazy val timerStateName = TimerStateUtils.getTimerStateVarName(
+    timeMode.toString)
+  private lazy val timerSecIndexColFamily = TimerStateUtils.getSecIndexColFamilyName(
+    timeMode.toString)
+  private lazy val timerState = new TimerStateImpl(
+    store, timeMode, keyEncoder, schemas(timerStateName).avroEnc,
+    schemas(timerSecIndexColFamily).avroEnc)
 
   /**
    * Function to register a timer for the given expiryTimestampMs
@@ -382,10 +389,16 @@ class DriverStatefulProcessorHandleImpl(
 
   private def addTimerColFamily(): Unit = {
     val stateName = TimerStateUtils.getTimerStateVarName(timeMode.toString)
+    val secIndexColFamilyName = TimerStateUtils.getSecIndexColFamilyName(timeMode.toString)
     val timerEncoder = new TimerKeyEncoder(keyExprEnc)
     val colFamilySchema = schemaUtils.
       getTimerStateSchema(stateName, timerEncoder.schemaForKeyRow, timerEncoder.schemaForValueRow)
+    val secIndexColFamilySchema = schemaUtils.
+      getTimerStateSchemaForSecIndex(secIndexColFamilyName,
+        timerEncoder.keySchemaForSecIndex,
+        timerEncoder.schemaForValueRow)
     columnFamilySchemas.put(stateName, colFamilySchema)
+    columnFamilySchemas.put(secIndexColFamilyName, secIndexColFamilySchema)
     val stateVariableInfo = TransformWithStateVariableUtils.getTimerState(stateName)
     stateVariableInfos.put(stateName, stateVariableInfo)
   }
@@ -404,6 +417,9 @@ class DriverStatefulProcessorHandleImpl(
     val ttlEnabled = if (ttlConfig.ttlDuration != null && ttlConfig.ttlDuration.isZero) {
       false
     } else {
+      val ttlColFamilyName = getTtlColFamilyName(stateName)
+      val ttlColFamilySchema = schemaUtils.getTtlStateSchema(ttlColFamilyName, keyExprEnc)
+      columnFamilySchemas.put(ttlColFamilyName, ttlColFamilySchema)
       true
     }
 
@@ -432,6 +448,9 @@ class DriverStatefulProcessorHandleImpl(
     val ttlEnabled = if (ttlConfig.ttlDuration != null && ttlConfig.ttlDuration.isZero) {
       false
     } else {
+      val ttlColFamilyName = getTtlColFamilyName(stateName)
+      val ttlColFamilySchema = schemaUtils.getTtlStateSchema(ttlColFamilyName, keyExprEnc)
+      columnFamilySchemas.put(ttlColFamilyName, ttlColFamilySchema)
       true
     }
 
@@ -459,14 +478,19 @@ class DriverStatefulProcessorHandleImpl(
       ttlConfig: TTLConfig): MapState[K, V] = {
     verifyStateVarOperations("get_map_state", PRE_INIT)
 
+    val userKeyEnc = encoderFor[K]
+    val valEncoder = encoderFor[V]
     val ttlEnabled = if (ttlConfig.ttlDuration != null && ttlConfig.ttlDuration.isZero) {
       false
     } else {
+      val ttlColFamilyName = getTtlColFamilyName(stateName)
+      val ttlColFamilySchema = schemaUtils.getTtlStateSchema(
+        ttlColFamilyName, keyExprEnc, userKeyEnc.schema)
+      columnFamilySchemas.put(ttlColFamilyName, ttlColFamilySchema)
       true
     }
 
-    val userKeyEnc = encoderFor[K]
-    val valEncoder = encoderFor[V]
+
     val colFamilySchema = schemaUtils.
       getMapStateSchema(stateName, keyExprEnc, userKeyEnc, valEncoder, ttlEnabled)
     columnFamilySchemas.put(stateName, colFamilySchema)

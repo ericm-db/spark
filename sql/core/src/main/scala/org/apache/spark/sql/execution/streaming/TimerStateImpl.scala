@@ -43,6 +43,15 @@ object TimerStateUtils {
       TimerStateUtils.PROC_TIMERS_STATE_NAME + TimerStateUtils.KEY_TO_TIMESTAMP_CF
     }
   }
+
+  def getSecIndexColFamilyName(timeMode: String): String = {
+    assert(timeMode == TimeMode.EventTime.toString || timeMode == TimeMode.ProcessingTime.toString)
+    if (timeMode == TimeMode.EventTime.toString) {
+      TimerStateUtils.EVENT_TIMERS_STATE_NAME + TimerStateUtils.TIMESTAMP_TO_KEY_CF
+    } else {
+      TimerStateUtils.PROC_TIMERS_STATE_NAME + TimerStateUtils.TIMESTAMP_TO_KEY_CF
+    }
+  }
 }
 
 /**
@@ -55,7 +64,9 @@ object TimerStateUtils {
 class TimerStateImpl(
     store: StateStore,
     timeMode: TimeMode,
-    keyExprEnc: ExpressionEncoder[Any]) extends Logging {
+    keyExprEnc: ExpressionEncoder[Any],
+    avroEnc: Option[AvroEncoderSpec] = None,
+    secIndexAvroEnc: Option[AvroEncoderSpec] = None) extends Logging {
 
   private val EMPTY_ROW =
     UnsafeProjection.create(Array[DataType](NullType)).apply(InternalRow.apply(null))
@@ -75,7 +86,7 @@ class TimerStateImpl(
   private val keyToTsCFName = timerCFName + TimerStateUtils.KEY_TO_TIMESTAMP_CF
   store.createColFamilyIfAbsent(keyToTsCFName, schemaForKeyRow,
     schemaForValueRow, PrefixKeyScanStateEncoderSpec(schemaForKeyRow, 1),
-    useMultipleValuesPerKey = false, isInternal = true)
+    useMultipleValuesPerKey = false, isInternal = true, avroEncoderSpec = avroEnc)
 
   // We maintain a secondary index that inverts the ordering of the timestamp
   // and grouping key
@@ -83,7 +94,7 @@ class TimerStateImpl(
   private val tsToKeyCFName = timerCFName + TimerStateUtils.TIMESTAMP_TO_KEY_CF
   store.createColFamilyIfAbsent(tsToKeyCFName, keySchemaForSecIndex,
     schemaForValueRow, RangeKeyScanStateEncoderSpec(keySchemaForSecIndex, Seq(0)),
-    useMultipleValuesPerKey = false, isInternal = true)
+    useMultipleValuesPerKey = false, isInternal = true, avroEncoderSpec = secIndexAvroEnc)
 
   private def getGroupingKey(cfName: String): Any = {
     val keyOption = ImplicitGroupingKeyTracker.getImplicitKeyOption

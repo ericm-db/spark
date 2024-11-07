@@ -21,8 +21,9 @@ import java.time.Duration
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.catalyst.expressions.{UnsafeProjection, UnsafeRow}
+import org.apache.spark.sql.execution.streaming.StateStoreColumnFamilySchemaUtils.getTtlColFamilyName
 import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchemaUtils._
-import org.apache.spark.sql.execution.streaming.state.{RangeKeyScanStateEncoderSpec, StateStore}
+import org.apache.spark.sql.execution.streaming.state.{AvroEncoderSpec, RangeKeyScanStateEncoderSpec, StateStore}
 import org.apache.spark.sql.types._
 
 object StateTTLSchema {
@@ -79,12 +80,13 @@ abstract class SingleKeyTTLStateImpl(
     stateName: String,
     store: StateStore,
     keyExprEnc: ExpressionEncoder[Any],
-    ttlExpirationMs: Long)
+    ttlExpirationMs: Long,
+    avroEnc: Option[AvroEncoderSpec] = None)
   extends TTLState {
 
   import org.apache.spark.sql.execution.streaming.StateTTLSchema._
 
-  private val ttlColumnFamilyName = "$ttl_" + stateName
+  private val ttlColumnFamilyName = getTtlColFamilyName(stateName)
   private val keySchema = getSingleKeyTTLRowSchema(keyExprEnc.schema)
   private val keyTTLRowEncoder = new SingleKeyTTLEncoder(keyExprEnc)
 
@@ -93,7 +95,7 @@ abstract class SingleKeyTTLStateImpl(
     UnsafeProjection.create(Array[DataType](NullType)).apply(InternalRow.apply(null))
 
   store.createColFamilyIfAbsent(ttlColumnFamilyName, keySchema, TTL_VALUE_ROW_SCHEMA,
-    RangeKeyScanStateEncoderSpec(keySchema, Seq(0)), isInternal = true)
+    RangeKeyScanStateEncoderSpec(keySchema, Seq(0)), isInternal = true, avroEncoderSpec = avroEnc)
 
   /**
    * This function will be called when clear() on State Variables
@@ -199,12 +201,13 @@ abstract class CompositeKeyTTLStateImpl[K](
     store: StateStore,
     keyExprEnc: ExpressionEncoder[Any],
     userKeyEncoder: ExpressionEncoder[Any],
-    ttlExpirationMs: Long)
+    ttlExpirationMs: Long,
+    avroEnc: Option[AvroEncoderSpec] = None)
   extends TTLState {
 
   import org.apache.spark.sql.execution.streaming.StateTTLSchema._
 
-  private val ttlColumnFamilyName = "$ttl_" + stateName
+  private val ttlColumnFamilyName = getTtlColFamilyName(stateName)
   private val keySchema = getCompositeKeyTTLRowSchema(
     keyExprEnc.schema, userKeyEncoder.schema
   )
@@ -218,7 +221,7 @@ abstract class CompositeKeyTTLStateImpl[K](
 
   store.createColFamilyIfAbsent(ttlColumnFamilyName, keySchema,
     TTL_VALUE_ROW_SCHEMA, RangeKeyScanStateEncoderSpec(keySchema,
-      Seq(0)), isInternal = true)
+      Seq(0)), isInternal = true, avroEncoderSpec = avroEnc)
 
   def clearTTLState(): Unit = {
     val iterator = store.iterator(ttlColumnFamilyName)

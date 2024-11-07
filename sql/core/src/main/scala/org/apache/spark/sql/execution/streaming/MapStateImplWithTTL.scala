@@ -21,7 +21,7 @@ import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.catalyst.expressions.UnsafeRow
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchemaUtils._
-import org.apache.spark.sql.execution.streaming.state.{PrefixKeyScanStateEncoderSpec, StateStore, StateStoreErrors}
+import org.apache.spark.sql.execution.streaming.state.{AvroEncoderSpec, PrefixKeyScanStateEncoderSpec, StateStore, StateStoreErrors}
 import org.apache.spark.sql.streaming.{MapState, TTLConfig}
 import org.apache.spark.util.NextIterator
 
@@ -36,6 +36,10 @@ import org.apache.spark.util.NextIterator
  * @param ttlConfig  - the ttl configuration (time to live duration etc.)
  * @param batchTimestampMs - current batch processing timestamp.
  * @param metrics - metrics to be updated as part of stateful processing
+ * @param avroEnc - optional Avro serializer and deserializer for this state variable that
+ *                is used by the StateStore to encode state in Avro format
+ * @param ttlAvroEnc - optional Avro serializer and deserializer for TTL state that
+ *                is used by the StateStore to encode state in Avro format
  * @tparam K - type of key for map state variable
  * @tparam V - type of value for map state variable
  * @return - instance of MapState of type [K,V] that can be used to store state persistently
@@ -48,9 +52,11 @@ class MapStateImplWithTTL[K, V](
     valEncoder: ExpressionEncoder[Any],
     ttlConfig: TTLConfig,
     batchTimestampMs: Long,
-    metrics: Map[String, SQLMetric] = Map.empty)
+    metrics: Map[String, SQLMetric] = Map.empty,
+    avroEnc: Option[AvroEncoderSpec] = None,
+    ttlAvroEnc: Option[AvroEncoderSpec] = None)
   extends CompositeKeyTTLStateImpl[K](stateName, store,
-    keyExprEnc, userKeyEnc, batchTimestampMs)
+    keyExprEnc, userKeyEnc, batchTimestampMs, ttlAvroEnc)
   with MapState[K, V] with Logging {
 
   private val stateTypesEncoder = new CompositeKeyStateEncoder(
@@ -66,7 +72,8 @@ class MapStateImplWithTTL[K, V](
       getCompositeKeySchema(keyExprEnc.schema, userKeyEnc.schema)
     store.createColFamilyIfAbsent(stateName, schemaForCompositeKeyRow,
       getValueSchemaWithTTL(valEncoder.schema, true),
-      PrefixKeyScanStateEncoderSpec(schemaForCompositeKeyRow, 1))
+      PrefixKeyScanStateEncoderSpec(schemaForCompositeKeyRow, 1),
+      avroEncoderSpec = avroEnc)
   }
 
   /** Whether state exists or not. */
