@@ -23,7 +23,7 @@ import org.apache.hadoop.fs.Path
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.Encoders
-import org.apache.spark.sql.execution.streaming.{CheckpointFileManager, ListStateImplWithTTL, MapStateImplWithTTL, MemoryStream, TimerStateUtils, ValueStateImpl, ValueStateImplWithTTL}
+import org.apache.spark.sql.execution.streaming.{CheckpointFileManager, ListStateImplWithTTL, MapStateImplWithTTL, MemoryStream, ValueStateImpl, ValueStateImplWithTTL}
 import org.apache.spark.sql.execution.streaming.state._
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.streaming.util.StreamManualClock
@@ -275,60 +275,98 @@ class TransformWithValueStateTTLSuite extends TransformWithStateTTLTest {
         val fm = CheckpointFileManager.create(stateSchemaPath, hadoopConf)
 
         val keySchema = new StructType().add("value", StringType)
-        val schemaForKeyRow: StructType = new StructType()
-          .add("key", new StructType(keySchema.fields))
+        val timerKeyStruct = new StructType(keySchema.fields)
+        val schemaForTimerKeyRow: StructType = new StructType()
+          .add("key", timerKeyStruct)
           .add("expiryTimestampMs", LongType, nullable = false)
-        val schemaForValueRow: StructType = StructType(Array(StructField("__dummy__", NullType)))
+        val schemaForTimerValueRow: StructType =
+          StructType(Array(StructField("__dummy__", NullType)))
+
+        // Timer schemas
         val schema0 = StateStoreColFamilySchema(
-          TimerStateUtils.getTimerStateVarName(TimeMode.ProcessingTime().toString),
-          schemaForKeyRow,
-          schemaForValueRow,
-          Some(PrefixKeyScanStateEncoderSpec(schemaForKeyRow, 1)))
+          "$procTimers_keyToTimestamp",
+          schemaForTimerKeyRow,
+          schemaForTimerValueRow,
+          Some(PrefixKeyScanStateEncoderSpec(schemaForTimerKeyRow, 1)))
+
+        val schemaForTimerReverseKeyRow: StructType = new StructType()
+          .add("expiryTimestampMs", LongType, nullable = false)
+          .add("key", timerKeyStruct)
         val schema1 = StateStoreColFamilySchema(
-          "valueStateTTL",
-          keySchema,
-          new StructType().add("value",
-            new StructType()
-              .add("value", IntegerType, false))
-          .add("ttlExpirationMs", LongType),
-          Some(NoPrefixKeyStateEncoderSpec(keySchema)),
-          None
-        )
+          "$procTimers_timestampToKey",
+          schemaForTimerReverseKeyRow,
+          schemaForTimerValueRow,
+          Some(RangeKeyScanStateEncoderSpec(schemaForTimerReverseKeyRow, List(0))))
+
+        // TTL tracking schemas
+        val ttlKeySchema = new StructType()
+          .add("expirationMs", BinaryType)
+          .add("groupingKey", keySchema)
+
         val schema2 = StateStoreColFamilySchema(
-          "valueState",
-          keySchema,
-          new StructType().add("value", IntegerType, false),
-          Some(NoPrefixKeyStateEncoderSpec(keySchema)),
-          None
-        )
-        val schema3 = StateStoreColFamilySchema(
-          "listState",
-          keySchema,
-          new StructType().add("value",
-            new StructType()
-              .add("id", LongType, false)
-              .add("name", StringType))
-            .add("ttlExpirationMs", LongType),
-          Some(NoPrefixKeyStateEncoderSpec(keySchema)),
-          None
-        )
+          "$ttl_listState",
+          ttlKeySchema,
+          schemaForTimerValueRow,
+          Some(RangeKeyScanStateEncoderSpec(ttlKeySchema, List(0))))
 
         val userKeySchema = new StructType()
           .add("id", IntegerType, false)
           .add("name", StringType)
+        val ttlMapKeySchema = new StructType()
+          .add("expirationMs", BinaryType)
+          .add("groupingKey", keySchema)
+          .add("userKey", userKeySchema)
+
+        val schema3 = StateStoreColFamilySchema(
+          "$ttl_mapState",
+          ttlMapKeySchema,
+          schemaForTimerValueRow,
+          Some(RangeKeyScanStateEncoderSpec(ttlMapKeySchema, List(0))))
+
+        val schema4 = StateStoreColFamilySchema(
+          "$ttl_valueStateTTL",
+          ttlKeySchema,
+          schemaForTimerValueRow,
+          Some(RangeKeyScanStateEncoderSpec(ttlKeySchema, List(0))))
+
+        // Main state schemas
+        val schema5 = StateStoreColFamilySchema(
+          "listState",
+          keySchema,
+          new StructType()
+            .add("value", new StructType()
+              .add("id", LongType, false)
+              .add("name", StringType))
+            .add("ttlExpirationMs", LongType),
+          Some(NoPrefixKeyStateEncoderSpec(keySchema)))
+
         val compositeKeySchema = new StructType()
           .add("key", new StructType().add("value", StringType))
           .add("userKey", userKeySchema)
-        val schema4 = StateStoreColFamilySchema(
+        val schema6 = StateStoreColFamilySchema(
           "mapState",
           compositeKeySchema,
-          new StructType().add("value",
-            new StructType()
+          new StructType()
+            .add("value", new StructType()
               .add("value", StringType))
             .add("ttlExpirationMs", LongType),
           Some(PrefixKeyScanStateEncoderSpec(compositeKeySchema, 1)),
-          Option(userKeySchema)
-        )
+          Option(userKeySchema))
+
+        val schema7 = StateStoreColFamilySchema(
+          "valueState",
+          keySchema,
+          new StructType().add("value", IntegerType, false),
+          Some(NoPrefixKeyStateEncoderSpec(keySchema)))
+
+        val schema8 = StateStoreColFamilySchema(
+          "valueStateTTL",
+          keySchema,
+          new StructType()
+            .add("value", new StructType()
+              .add("value", IntegerType, false))
+            .add("ttlExpirationMs", LongType),
+          Some(NoPrefixKeyStateEncoderSpec(keySchema)))
 
         val ttlKey = "k1"
         val noTtlKey = "k2"
@@ -370,9 +408,11 @@ class TransformWithValueStateTTLSuite extends TransformWithStateTTLTest {
               q.lastProgress.stateOperators.head.customMetrics
                 .get("numMapStateWithTTLVars").toInt)
 
-            assert(colFamilySeq.length == 5)
+            // Now expect 9 column families
+            assert(colFamilySeq.length == 9)
             assert(colFamilySeq.map(_.toString).toSet == Set(
-              schema0, schema1, schema2, schema3, schema4
+              schema0, schema1, schema2, schema3, schema4,
+              schema5, schema6, schema7, schema8
             ).map(_.toString))
           },
           StopStream
