@@ -261,13 +261,13 @@ class PrefixKeyScanStateEncoder(
   // Prefix Key schema and projection definitions used by the Avro Serializers
   // and Deserializers
   private val prefixKeySchema = StructType(keySchema.take(numColsPrefixKey))
-  private val prefixKeyAvroType = SchemaConverters.toAvroType(prefixKeySchema)
+  private lazy val prefixKeyAvroType = SchemaConverters.toAvroType(prefixKeySchema)
   private val prefixKeyProj = UnsafeProjection.create(prefixKeySchema)
 
   // Remaining Key schema and projection definitions used by the Avro Serializers
   // and Deserializers
   private val remainingKeySchema = StructType(keySchema.drop(numColsPrefixKey))
-  private val remainingKeyAvroType = SchemaConverters.toAvroType(remainingKeySchema)
+  private lazy val remainingKeyAvroType = SchemaConverters.toAvroType(remainingKeySchema)
   private val remainingKeyProj = UnsafeProjection.create(remainingKeySchema)
 
   // This is quite simple to do - just bind sequentially, as we don't change the order.
@@ -482,7 +482,7 @@ class RangeKeyScanStateEncoder(
   private val rangeScanAvroSchema = StateStoreColumnFamilySchemaUtils.convertForRangeScan(
     StructType(rangeScanKeyFieldsWithOrdinal.map(_._1).toArray))
 
-  private val rangeScanAvroType = SchemaConverters.toAvroType(rangeScanAvroSchema)
+  private lazy val rangeScanAvroType = SchemaConverters.toAvroType(rangeScanAvroSchema)
 
   private val rangeScanAvroProjection = UnsafeProjection.create(rangeScanAvroSchema)
 
@@ -491,7 +491,7 @@ class RangeKeyScanStateEncoder(
     0.to(keySchema.length - 1).diff(orderingOrdinals).map(keySchema(_))
   )
 
-  private val remainingKeyAvroType = SchemaConverters.toAvroType(remainingKeySchema)
+  private lazy val remainingKeyAvroType = SchemaConverters.toAvroType(remainingKeySchema)
 
   private val remainingKeyAvroProjection = UnsafeProjection.create(remainingKeySchema)
 
@@ -830,7 +830,7 @@ class NoPrefixKeyStateEncoder(
   // Reusable objects
   private val usingAvroEncoding = avroEnc.isDefined
   private val keyRow = new UnsafeRow(keySchema.size)
-  private val keyAvroType = SchemaConverters.toAvroType(keySchema)
+  private lazy val keyAvroType = SchemaConverters.toAvroType(keySchema)
   private val keyProj = UnsafeProjection.create(keySchema)
 
   override def encodeKey(row: UnsafeRow): Array[Byte] = {
@@ -922,7 +922,7 @@ class MultiValuedStateEncoder(
   // Reusable objects
   private val out = new ByteArrayOutputStream
   private val valueRow = new UnsafeRow(valueSchema.size)
-  private val valueAvroType = SchemaConverters.toAvroType(valueSchema)
+  private lazy val valueAvroType = SchemaConverters.toAvroType(valueSchema)
   private val valueProj = UnsafeProjection.create(valueSchema)
 
   override def encodeValue(row: UnsafeRow): Array[Byte] = {
@@ -1018,7 +1018,7 @@ class SingleValueStateEncoder(
   // Reusable objects
   private val out = new ByteArrayOutputStream
   private val valueRow = new UnsafeRow(valueSchema.size)
-  private val valueAvroType = SchemaConverters.toAvroType(valueSchema)
+  private lazy val valueAvroType = SchemaConverters.toAvroType(valueSchema)
   private val valueProj = UnsafeProjection.create(valueSchema)
 
   override def encodeValue(row: UnsafeRow): Array[Byte] = {
