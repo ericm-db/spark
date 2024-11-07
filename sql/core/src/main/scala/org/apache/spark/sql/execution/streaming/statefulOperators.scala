@@ -112,7 +112,7 @@ trait StatefulOperator extends SparkPlan {
   }
 
   lazy val stateStoreEncoding: String =
-    session.sessionState.conf.getConf(
+    conf.getConf(
       SQLConf.STREAMING_STATE_STORE_ENCODING_FORMAT)
 
   def metadataFilePath(): Path = {
