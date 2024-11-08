@@ -74,15 +74,17 @@ object StateStoreColumnFamilySchemaUtils {
  *                            StateStoreColumnFamilySchema for each state variable from the driver
  */
 class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) extends Logging {
+  private def getAvroSerializer(schema: StructType): AvroSerializer = {
+    val avroType = SchemaConverters.toAvroType(schema)
+    new AvroSerializer(schema, avroType, nullable = false)
+  }
 
-  private def getAvroSerdeForSchema(schema: StructType): (AvroSerializer, AvroDeserializer) = {
+  private def getAvroDeserializer(schema: StructType): AvroDeserializer = {
     val avroType = SchemaConverters.toAvroType(schema)
     val avroOptions = AvroOptions(Map.empty)
-    val serializer = new AvroSerializer(schema, avroType, nullable = false)
-    val deserializer = new AvroDeserializer(avroType, schema,
+    new AvroDeserializer(avroType, schema,
       avroOptions.datetimeRebaseModeInRead, avroOptions.useStableIdForUnionType,
       avroOptions.stableIdPrefixForUnionType, avroOptions.recursiveFieldMaxDepth)
-    (serializer, deserializer)
   }
 
   /**
@@ -95,18 +97,19 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) extends Lo
       suffixKeySchema: Option[StructType] = None
   ): Option[AvroEncoder] = {
     if (initializeAvroSerde) {
-      val (keySer, keyDe) =
-        getAvroSerdeForSchema(keySchema)
-      val (valueSerializer, valueDeserializer) =
-        getAvroSerdeForSchema(valSchema)
+
       val (suffixKeySer, suffixKeyDe) = if (suffixKeySchema.isDefined) {
-        val serde = getAvroSerdeForSchema(suffixKeySchema.get)
-        (Some(serde._1), Some(serde._2))
+        (Some(getAvroSerializer(suffixKeySchema.get)),
+          Some(getAvroDeserializer(suffixKeySchema.get)))
       } else {
         (None, None)
       }
       Some(AvroEncoder(
-        keySer, keyDe, valueSerializer, valueDeserializer, suffixKeySer, suffixKeyDe))
+        getAvroSerializer(keySchema),
+        getAvroDeserializer(keySchema),
+        getAvroSerializer(valSchema),
+        getAvroDeserializer(valSchema),
+        suffixKeySer, suffixKeyDe))
     } else {
       None
     }
