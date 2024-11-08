@@ -16,6 +16,7 @@
  */
 package org.apache.spark.sql.execution.streaming
 
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql.Encoder
 import org.apache.spark.sql.avro.{AvroDeserializer, AvroOptions, AvroSerializer, SchemaConverters}
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
@@ -40,12 +41,18 @@ object StateStoreColumnFamilySchemaUtils {
    */
   def convertForRangeScan(schema: StructType, ordinals: Seq[Int] = Seq.empty): StructType = {
     val ordinalSet = ordinals.toSet
-    StructType(schema.fields.zipWithIndex.map { case (field, idx) =>
+
+    StructType(schema.fields.zipWithIndex.flatMap { case (field, idx) =>
       if ((ordinals.isEmpty || ordinalSet.contains(idx)) && isFixedSize(field.dataType)) {
-        // Convert numeric types to BinaryType while preserving nullability
-        field.copy(dataType = BinaryType)
+        // For each numeric field, create two fields:
+        // 1. A boolean for sign (positive = true, negative = false)
+        // 2. The original numeric value in big-endian format
+        Seq(
+          StructField(s"${field.name}_marker", BooleanType, nullable = false),
+          field.copy(name = s"${field.name}_value", BinaryType)
+        )
       } else {
-        field
+        Seq(field)
       }
     })
   }
@@ -67,13 +74,13 @@ object StateStoreColumnFamilySchemaUtils {
  *                            for this state type. This class is used to create the
  *                            StateStoreColumnFamilySchema for each state variable from the driver
  */
-class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) {
+class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) extends Logging {
 
   /**
    * If initializeAvroSerde is true, this method will create an Avro Serializer and Deserializer
    * for a particular key and value schema.
    */
-  private def getAvroSerde(
+  private[sql] def getAvroSerde(
       keySchema: StructType,
       valSchema: StructType,
       suffixKeySchema: Option[StructType] = None
@@ -170,9 +177,9 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) {
       ttlValSchema,
       Some(RangeKeyScanStateEncoderSpec(ttlKeySchema, Seq(0))),
       avroEnc = getAvroSerde(
-        StructType(ttlKeySchema.take(1)),
+        StructType(ttlKeySchema.take(2)),
         ttlValSchema,
-        Some(StructType(ttlKeySchema.drop(1)))
+        Some(StructType(ttlKeySchema.drop(2)))
       )
     )
   }
@@ -191,9 +198,9 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) {
       ttlValSchema,
       Some(RangeKeyScanStateEncoderSpec(ttlKeySchema, Seq(0))),
       avroEnc = getAvroSerde(
-        StructType(ttlKeySchema.take(1)),
+        StructType(ttlKeySchema.take(2)),
         ttlValSchema,
-        Some(StructType(ttlKeySchema.drop(1)))
+        Some(StructType(ttlKeySchema.drop(2)))
       )
     )
   }
@@ -226,9 +233,9 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) {
       valSchema,
       Some(RangeKeyScanStateEncoderSpec(keySchema, Seq(0))),
       avroEnc = getAvroSerde(
-        StructType(avroKeySchema.take(1)),
+        StructType(avroKeySchema.take(2)),
         valSchema,
-        Some(StructType(avroKeySchema.drop(1)))
+        Some(StructType(avroKeySchema.drop(2)))
       ))
   }
 }

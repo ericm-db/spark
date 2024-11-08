@@ -23,7 +23,7 @@ import java.lang.Float.{floatToRawIntBits, intBitsToFloat}
 import java.nio.{ByteBuffer, ByteOrder}
 
 import org.apache.avro.Schema
-import org.apache.avro.generic.{GenericDatumReader, GenericDatumWriter}
+import org.apache.avro.generic.{GenericData, GenericDatumReader, GenericDatumWriter, GenericRecord}
 import org.apache.avro.io.{DecoderFactory, EncoderFactory}
 
 import org.apache.spark.internal.Logging
@@ -684,16 +684,98 @@ class RangeKeyScanStateEncoder(
     writer.getRow()
   }
 
+  def encodePrefixKeyForRangeScan(
+      row: UnsafeRow, avroType: Schema): Array[Byte] = {
+    val record = new GenericData.Record(avroType)
+    var fieldIdx = 0
+    rangeScanKeyFieldsWithOrdinal.zipWithIndex.foreach { case (fieldWithOrdinal, idx) =>
+      val field = fieldWithOrdinal._1
+      val value = row.get(idx, field.dataType)
+      if (value == null) {
+        record.put(fieldIdx, false) // isNull marker
+        record.put(fieldIdx + 1, new Array[Byte](field.dataType.defaultSize))
+      } else {
+        field.dataType match {
+          case LongType =>
+            val longVal = value.asInstanceOf[Long]
+            val marker = longVal >= 0
+            record.put(fieldIdx, marker)
+
+            // Convert long to byte array in big endian format
+            val bbuf = ByteBuffer.allocate(8)
+            bbuf.order(ByteOrder.BIG_ENDIAN)
+            bbuf.putLong(longVal)
+            // Create a new byte array to avoid Avro's issue with direct ByteBuffer arrays
+            val bytes = new Array[Byte](8)
+            bbuf.position(0)
+            bbuf.get(bytes)
+
+            // Wrap bytes in Avro's ByteBuffer to ensure proper handling
+            record.put(fieldIdx + 1, ByteBuffer.wrap(bytes))
+
+          case _ => throw new UnsupportedOperationException(
+            s"Range scan encoding not supported for data type: ${field.dataType}")
+        }
+      }
+      fieldIdx += 2
+    }
+
+    out.reset()
+    val writer = new GenericDatumWriter[GenericRecord](rangeScanAvroType)
+    val encoder = EncoderFactory.get().binaryEncoder(out, null)
+    writer.write(record, encoder)
+    encoder.flush()
+    out.toByteArray
+  }
+
+  def decodePrefixKeyForRangeScan(
+      bytes: Array[Byte],
+      avroType: Schema): UnsafeRow = {
+
+    val reader = new GenericDatumReader[GenericRecord](avroType)
+    val decoder = DecoderFactory.get().binaryDecoder(bytes, 0, bytes.length, null)
+    val record = reader.read(null, decoder)
+
+    val rowWriter = new UnsafeRowWriter(rangeScanKeyFieldsWithOrdinal.length)
+    rowWriter.resetRowWriter()
+
+    var fieldIdx = 0
+    rangeScanKeyFieldsWithOrdinal.zipWithIndex.foreach { case (fieldWithOrdinal, idx) =>
+      val field = fieldWithOrdinal._1
+      val isMarkerNull = record.get(fieldIdx) == null
+
+      if (isMarkerNull) {
+        rowWriter.setNullAt(idx)
+      } else {
+        field.dataType match {
+          case LongType =>
+            // Get bytes from Avro ByteBuffer
+            val byteBuf = record.get(fieldIdx + 1).asInstanceOf[ByteBuffer]
+            val bbuf = ByteBuffer.allocate(8)
+            bbuf.order(ByteOrder.BIG_ENDIAN)
+
+            // Copy bytes to our ByteBuffer
+            bbuf.put(byteBuf.array(), byteBuf.position(), byteBuf.remaining())
+            bbuf.flip()
+
+            val longVal = bbuf.getLong(fieldIdx)
+            rowWriter.write(idx, longVal)
+
+          case _ => throw new UnsupportedOperationException(
+            s"Range scan decoding not supported for data type: ${field.dataType}")
+        }
+      }
+      fieldIdx += 2
+    }
+
+    rowWriter.getRow()
+  }
+
   override def encodeKey(row: UnsafeRow): Array[Byte] = {
     // This prefix key has the columns specified by orderingOrdinals
     val prefixKey = extractPrefixKey(row)
     val rangeScanKeyEncoded = if (avroEnc.isDefined) {
-      encodeUnsafeRow(
-        encodePrefixKeyForRangeScan(prefixKey),
-        avroEnc.get.keySerializer,
-        rangeScanAvroType,
-        out
-      )
+      encodePrefixKeyForRangeScan(prefixKey, rangeScanAvroType)
     } else {
       encodeUnsafeRow(encodePrefixKeyForRangeScan(prefixKey))
     }
@@ -745,14 +827,12 @@ class RangeKeyScanStateEncoder(
     Platform.copyMemory(keyBytes, decodeKeyStartOffset + 4,
       prefixKeyEncoded, Platform.BYTE_ARRAY_OFFSET, prefixKeyEncodedLen)
 
-    val prefixKeyDecodedForRangeScan = if (avroEnc.isDefined) {
-      decodeToUnsafeRow(prefixKeyEncoded, avroEnc.get.keyDeserializer,
-        rangeScanAvroType, rangeScanAvroProjection)
+    val prefixKeyDecoded = if (avroEnc.isDefined) {
+      decodePrefixKeyForRangeScan(prefixKeyEncoded, rangeScanAvroType)
     } else {
-      decodeToUnsafeRow(prefixKeyEncoded,
-        numFields = orderingOrdinals.length)
+      decodePrefixKeyForRangeScan(decodeToUnsafeRow(prefixKeyEncoded,
+        numFields = orderingOrdinals.length))
     }
-    val prefixKeyDecoded = decodePrefixKeyForRangeScan(prefixKeyDecodedForRangeScan)
 
     if (orderingOrdinals.length < keySchema.length) {
       // Here we calculate the remainingKeyEncodedLen leveraging the length of keyBytes
@@ -785,12 +865,7 @@ class RangeKeyScanStateEncoder(
 
   override def encodePrefixKey(prefixKey: UnsafeRow): Array[Byte] = {
     val rangeScanKeyEncoded = if (avroEnc.isDefined) {
-      encodeUnsafeRow(
-        encodePrefixKeyForRangeScan(prefixKey),
-        avroEnc.get.keySerializer,
-        rangeScanAvroType,
-        out
-      )
+      encodePrefixKeyForRangeScan(prefixKey, rangeScanAvroType)
     } else {
       encodeUnsafeRow(encodePrefixKeyForRangeScan(prefixKey))
     }
