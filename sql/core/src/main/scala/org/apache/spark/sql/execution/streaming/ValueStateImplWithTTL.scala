@@ -20,7 +20,7 @@ import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.catalyst.expressions.UnsafeRow
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchemaUtils._
-import org.apache.spark.sql.execution.streaming.state.{AvroEncoderSpec, NoPrefixKeyStateEncoderSpec, StateStore}
+import org.apache.spark.sql.execution.streaming.state.{AvroEncoder, NoPrefixKeyStateEncoderSpec, StateStore}
 import org.apache.spark.sql.streaming.{TTLConfig, ValueState}
 
 /**
@@ -36,7 +36,7 @@ import org.apache.spark.sql.streaming.{TTLConfig, ValueState}
  * @param metrics - metrics to be updated as part of stateful processing
  * @param avroEnc - optional Avro serializer and deserializer for this state variable that
  *                is used by the StateStore to encode state in Avro format
- * @param ttlAvroEnc - optional Avro serializer and deserializer for TTL state that
+ * @param secondaryIndexAvroEnc - optional Avro serializer and deserializer for TTL state that
  *                is used by the StateStore to encode state in Avro format
  * @tparam S - data type of object that will be stored
  */
@@ -48,10 +48,10 @@ class ValueStateImplWithTTL[S](
     ttlConfig: TTLConfig,
     batchTimestampMs: Long,
     metrics: Map[String, SQLMetric] = Map.empty,
-    avroEnc: Option[AvroEncoderSpec] = None,
-    ttlAvroEnc: Option[AvroEncoderSpec] = None)
+    avroEnc: Option[AvroEncoder] = None,
+    secondaryIndexAvroEnc: Option[AvroEncoder] = None)
   extends SingleKeyTTLStateImpl(
-    stateName, store, keyExprEnc, batchTimestampMs, ttlAvroEnc) with ValueState[S] {
+    stateName, store, keyExprEnc, batchTimestampMs, secondaryIndexAvroEnc) with ValueState[S] {
 
   private val stateTypesEncoder = StateTypesEncoder(keyExprEnc, valEncoder,
     stateName, hasTtl = true)

@@ -75,7 +75,8 @@ case class TransformWithStateExec(
     initialStateGroupingAttrs: Seq[Attribute],
     initialStateDataAttrs: Seq[Attribute],
     initialStateDeserializer: Expression,
-    initialState: SparkPlan)
+    initialState: SparkPlan,
+    columnFamilySchemas: Map[String, StateStoreColFamilySchema] = Map.empty)
   extends BinaryExecNode with StateStoreWriter with WatermarkSupport with ObjectProducerExec {
 
   override def shortName: String = "transformWithStateExec"
@@ -118,7 +119,7 @@ case class TransformWithStateExec(
    * Fetching the columnFamilySchemas from the StatefulProcessorHandle
    * after init is called.
    */
-  private def getColFamilySchemas(): Map[String, StateStoreColFamilySchema] = {
+  def getColFamilySchemas(): Map[String, StateStoreColFamilySchema] = {
     val columnFamilySchemas = getDriverProcessorHandle().getColumnFamilySchemas
     closeProcessorHandle()
     columnFamilySchemas
@@ -524,7 +525,6 @@ case class TransformWithStateExec(
 
   override protected def doExecute(): RDD[InternalRow] = {
     metrics // force lazy init at driver
-
     validateTimeMode()
 
     if (hasInitialState) {
@@ -535,11 +535,10 @@ case class TransformWithStateExec(
         initialState.execute(),
         getStateInfo,
         storeNames = Seq(),
-        session.streams.stateStoreCoordinator,
-        getColFamilySchemas()) {
+        session.streams.stateStoreCoordinator) {
         // The state store aware zip partitions will provide us with two iterators,
         // child data iterator and the initial state iterator per partition.
-        case (partitionId, childDataIterator, initStateIterator, colFamilySchemas) =>
+        case (partitionId, childDataIterator, initStateIterator) =>
           if (isStreaming) {
             val stateStoreId = StateStoreId(stateInfo.get.checkpointLocation,
               stateInfo.get.operatorId, partitionId)
@@ -557,27 +556,26 @@ case class TransformWithStateExec(
             )
 
             processDataWithInitialState(
-              store, childDataIterator, initStateIterator, colFamilySchemas)
+              store, childDataIterator, initStateIterator, columnFamilySchemas)
           } else {
             initNewStateStoreAndProcessData(
-              partitionId, hadoopConfBroadcast, getColFamilySchemas()) { (store, schemas) =>
+              partitionId, hadoopConfBroadcast, columnFamilySchemas) { (store, schemas) =>
               processDataWithInitialState(store, childDataIterator, initStateIterator, schemas)
             }
           }
       }
     } else {
       if (isStreaming) {
-        child.execute().mapPartitionsWithStateStoreWithSchemas[InternalRow](
+        child.execute().mapPartitionsWithStateStore[InternalRow](
           getStateInfo,
           keyEncoder.schema,
           DUMMY_VALUE_ROW_SCHEMA,
           NoPrefixKeyStateEncoderSpec(keyEncoder.schema),
           session.sessionState,
           Some(session.streams.stateStoreCoordinator),
-          useColumnFamilies = true,
-          columnFamilySchemas = getColFamilySchemas()
+          useColumnFamilies = true
         ) {
-          case (store: StateStore, singleIterator: Iterator[InternalRow], columnFamilySchemas) =>
+          case (store: StateStore, singleIterator: Iterator[InternalRow]) =>
             processData(store, singleIterator, columnFamilySchemas)
         }
       } else {
@@ -588,7 +586,7 @@ case class TransformWithStateExec(
         child.execute().mapPartitionsWithIndex[InternalRow](
           (i: Int, iter: Iterator[InternalRow]) => {
             initNewStateStoreAndProcessData(
-              i, hadoopConfBroadcast, getColFamilySchemas()) { (store, schemas) =>
+              i, hadoopConfBroadcast, columnFamilySchemas) { (store, schemas) =>
               processData(store, iter, schemas)
             }
           }
@@ -733,6 +731,22 @@ object TransformWithStateExec {
       stateStoreCkptIds = None
     )
 
+    val stateStoreEncoding = child.session.sessionState.conf.getConf(
+      SQLConf.STREAMING_STATE_STORE_ENCODING_FORMAT
+    )
+
+    def getDriverProcessorHandle(): DriverStatefulProcessorHandleImpl = {
+      val driverProcessorHandle = new DriverStatefulProcessorHandleImpl(
+        timeMode, keyEncoder, initializeAvroEnc =
+          stateStoreEncoding == StateStoreEncoding.Avro.toString)
+      driverProcessorHandle.setHandleState(StatefulProcessorHandleState.PRE_INIT)
+      statefulProcessor.setHandle(driverProcessorHandle)
+      statefulProcessor.init(outputMode, timeMode)
+      driverProcessorHandle
+    }
+
+    val columnFamilySchemas = getDriverProcessorHandle().getColumnFamilySchemas
+
     new TransformWithStateExec(
       keyDeserializer,
       valueDeserializer,
@@ -753,7 +767,8 @@ object TransformWithStateExec {
       initialStateGroupingAttrs,
       initialStateDataAttrs,
       initialStateDeserializer,
-      initialState)
+      initialState,
+      columnFamilySchemas)
   }
 }
 // scalastyle:on argcount

@@ -40,7 +40,7 @@ case class StateSchemaValidationResult(
 
 // Avro encoder that is used by the RocksDBStateStoreProvider and RocksDBStateEncoder
 // in order to serialize from UnsafeRow to a byte array of Avro encoding.
-case class AvroEncoderSpec(
+case class AvroEncoder(
   keySerializer: AvroSerializer,
   keyDeserializer: AvroDeserializer,
   valueSerializer: AvroSerializer,
@@ -56,7 +56,7 @@ case class StateStoreColFamilySchema(
     valueSchema: StructType,
     keyStateEncoderSpec: Option[KeyStateEncoderSpec] = None,
     userKeyEncoderSchema: Option[StructType] = None,
-    avroEnc: Option[AvroEncoderSpec] = None
+    avroEnc: Option[AvroEncoder] = None
 ) extends Serializable
 
 class StateSchemaCompatibilityChecker(

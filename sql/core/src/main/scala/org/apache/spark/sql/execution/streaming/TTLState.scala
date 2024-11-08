@@ -23,7 +23,7 @@ import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.catalyst.expressions.{UnsafeProjection, UnsafeRow}
 import org.apache.spark.sql.execution.streaming.StateStoreColumnFamilySchemaUtils.getTtlColFamilyName
 import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchemaUtils._
-import org.apache.spark.sql.execution.streaming.state.{AvroEncoderSpec, RangeKeyScanStateEncoderSpec, StateStore}
+import org.apache.spark.sql.execution.streaming.state.{AvroEncoder, RangeKeyScanStateEncoderSpec, StateStore}
 import org.apache.spark.sql.types._
 
 object StateTTLSchema {
@@ -81,7 +81,7 @@ abstract class SingleKeyTTLStateImpl(
     store: StateStore,
     keyExprEnc: ExpressionEncoder[Any],
     ttlExpirationMs: Long,
-    avroEnc: Option[AvroEncoderSpec] = None)
+    avroEnc: Option[AvroEncoder] = None)
   extends TTLState {
 
   import org.apache.spark.sql.execution.streaming.StateTTLSchema._
@@ -202,7 +202,7 @@ abstract class CompositeKeyTTLStateImpl[K](
     keyExprEnc: ExpressionEncoder[Any],
     userKeyEncoder: ExpressionEncoder[Any],
     ttlExpirationMs: Long,
-    avroEnc: Option[AvroEncoderSpec] = None)
+    avroEnc: Option[AvroEncoder] = None)
   extends TTLState {
 
   import org.apache.spark.sql.execution.streaming.StateTTLSchema._

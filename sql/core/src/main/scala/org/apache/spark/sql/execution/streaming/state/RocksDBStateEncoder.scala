@@ -98,12 +98,12 @@ abstract class RocksDBKeyStateEncoderBase(
   }
 }
 
-object RocksDBStateEncoder {
+object RocksDBStateEncoder extends Logging {
   def getKeyEncoder(
       keyStateEncoderSpec: KeyStateEncoderSpec,
       useColumnFamilies: Boolean,
       virtualColFamilyId: Option[Short] = None,
-      avroEnc: Option[AvroEncoderSpec] = None): RocksDBKeyStateEncoder = {
+      avroEnc: Option[AvroEncoder] = None): RocksDBKeyStateEncoder = {
     // Return the key state encoder based on the requested type
     keyStateEncoderSpec match {
       case NoPrefixKeyStateEncoderSpec(keySchema) =>
@@ -126,7 +126,7 @@ object RocksDBStateEncoder {
   def getValueEncoder(
       valueSchema: StructType,
       useMultipleValuesPerKey: Boolean,
-      avroEnc: Option[AvroEncoderSpec] = None): RocksDBValueStateEncoder = {
+      avroEnc: Option[AvroEncoder] = None): RocksDBValueStateEncoder = {
     if (useMultipleValuesPerKey) {
       new MultiValuedStateEncoder(valueSchema, avroEnc)
     } else {
@@ -233,7 +233,7 @@ class PrefixKeyScanStateEncoder(
     numColsPrefixKey: Int,
     useColumnFamilies: Boolean = false,
     virtualColFamilyId: Option[Short] = None,
-    avroEnc: Option[AvroEncoderSpec] = None)
+    avroEnc: Option[AvroEncoder] = None)
   extends RocksDBKeyStateEncoderBase(useColumnFamilies, virtualColFamilyId) {
 
   import RocksDBStateEncoder._
@@ -409,7 +409,7 @@ class RangeKeyScanStateEncoder(
     orderingOrdinals: Seq[Int],
     useColumnFamilies: Boolean = false,
     virtualColFamilyId: Option[Short] = None,
-    avroEnc: Option[AvroEncoderSpec] = None)
+    avroEnc: Option[AvroEncoder] = None)
   extends RocksDBKeyStateEncoderBase(useColumnFamilies, virtualColFamilyId) with Logging {
 
   import RocksDBStateEncoder._
@@ -897,7 +897,7 @@ class NoPrefixKeyStateEncoder(
     keySchema: StructType,
     useColumnFamilies: Boolean = false,
     virtualColFamilyId: Option[Short] = None,
-    avroEnc: Option[AvroEncoderSpec] = None)
+    avroEnc: Option[AvroEncoder] = None)
   extends RocksDBKeyStateEncoderBase(useColumnFamilies, virtualColFamilyId) with Logging {
 
   import RocksDBStateEncoder._
@@ -988,7 +988,7 @@ class NoPrefixKeyStateEncoder(
  */
 class MultiValuedStateEncoder(
     valueSchema: StructType,
-    avroEnc: Option[AvroEncoderSpec] = None)
+    avroEnc: Option[AvroEncoder] = None)
   extends RocksDBValueStateEncoder with Logging {
 
   import RocksDBStateEncoder._
@@ -1084,7 +1084,7 @@ class MultiValuedStateEncoder(
  */
 class SingleValueStateEncoder(
     valueSchema: StructType,
-    avroEnc: Option[AvroEncoderSpec] = None)
+    avroEnc: Option[AvroEncoder] = None)
   extends RocksDBValueStateEncoder with Logging {
 
   import RocksDBStateEncoder._

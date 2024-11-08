@@ -19,7 +19,7 @@ package org.apache.spark.sql.execution.streaming
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.execution.metric.SQLMetric
-import org.apache.spark.sql.execution.streaming.state.{AvroEncoderSpec, NoPrefixKeyStateEncoderSpec, StateStore, StateStoreErrors}
+import org.apache.spark.sql.execution.streaming.state.{AvroEncoder, NoPrefixKeyStateEncoderSpec, StateStore, StateStoreErrors}
 import org.apache.spark.sql.streaming.ListState
 import org.apache.spark.sql.types.StructType
 
@@ -42,7 +42,7 @@ class ListStateImpl[S](
      keyExprEnc: ExpressionEncoder[Any],
      valEncoder: ExpressionEncoder[Any],
      metrics: Map[String, SQLMetric] = Map.empty,
-     avroEnc: Option[AvroEncoderSpec] = None)
+     avroEnc: Option[AvroEncoder] = None)
   extends ListStateMetricsImpl
   with ListState[S]
   with Logging {

@@ -394,10 +394,10 @@ class DriverStatefulProcessorHandleImpl(
     val stateName = TimerStateUtils.getTimerStateVarName(timeMode.toString)
     val secIndexColFamilyName = TimerStateUtils.getSecIndexColFamilyName(timeMode.toString)
     val timerEncoder = new TimerKeyEncoder(keyExprEnc)
-    val colFamilySchema = schemaUtils.
-      getTimerStateSchema(stateName, timerEncoder.schemaForKeyRow, timerEncoder.schemaForValueRow)
-    val secIndexColFamilySchema = schemaUtils.
-      getTimerStateSchemaForSecIndex(secIndexColFamilyName,
+    val colFamilySchema = schemaUtils
+      .getTimerStateSchema(stateName, timerEncoder.schemaForKeyRow, timerEncoder.schemaForValueRow)
+    val secIndexColFamilySchema = schemaUtils
+      .getTimerStateSchemaForSecIndex(secIndexColFamilyName,
         timerEncoder.keySchemaForSecIndex,
         timerEncoder.schemaForValueRow)
     columnFamilySchemas.put(stateName, colFamilySchema)
@@ -458,8 +458,8 @@ class DriverStatefulProcessorHandleImpl(
     }
 
     val stateEncoder = encoderFor[T]
-    val colFamilySchema = schemaUtils.
-      getListStateSchema(stateName, keyExprEnc, stateEncoder, ttlEnabled)
+    val colFamilySchema = schemaUtils
+      .getListStateSchema(stateName, keyExprEnc, stateEncoder, ttlEnabled)
     checkIfDuplicateVariableDefined(stateName)
     columnFamilySchemas.put(stateName, colFamilySchema)
     val stateVariableInfo = TransformWithStateVariableUtils.
@@ -494,8 +494,8 @@ class DriverStatefulProcessorHandleImpl(
     }
 
 
-    val colFamilySchema = schemaUtils.
-      getMapStateSchema(stateName, keyExprEnc, userKeyEnc, valEncoder, ttlEnabled)
+    val colFamilySchema = schemaUtils
+      .getMapStateSchema(stateName, keyExprEnc, userKeyEnc, valEncoder, ttlEnabled)
     columnFamilySchemas.put(stateName, colFamilySchema)
     val stateVariableInfo = TransformWithStateVariableUtils.
       getMapState(stateName, ttlEnabled = ttlEnabled)

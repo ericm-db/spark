@@ -128,7 +128,7 @@ private[sql] class HDFSBackedStateStoreProvider extends StateStoreProvider with 
         keyStateEncoderSpec: KeyStateEncoderSpec,
         useMultipleValuesPerKey: Boolean = false,
         isInternal: Boolean = false,
-        avroEnc: Option[AvroEncoderSpec]): Unit = {
+        avroEnc: Option[AvroEncoder]): Unit = {
       throw StateStoreErrors.multipleColumnFamiliesNotSupported(providerName)
     }
 

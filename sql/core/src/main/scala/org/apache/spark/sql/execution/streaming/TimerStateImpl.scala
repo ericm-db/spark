@@ -65,8 +65,8 @@ class TimerStateImpl(
     store: StateStore,
     timeMode: TimeMode,
     keyExprEnc: ExpressionEncoder[Any],
-    avroEnc: Option[AvroEncoderSpec] = None,
-    secIndexAvroEnc: Option[AvroEncoderSpec] = None) extends Logging {
+    avroEnc: Option[AvroEncoder] = None,
+    secIndexAvroEnc: Option[AvroEncoder] = None) extends Logging {
 
   private val EMPTY_ROW =
     UnsafeProjection.create(Array[DataType](NullType)).apply(InternalRow.apply(null))

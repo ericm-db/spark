@@ -21,14 +21,13 @@ import org.apache.spark.sql.Encoder
 import org.apache.spark.sql.avro.{AvroDeserializer, AvroOptions, AvroSerializer, SchemaConverters}
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSchemaUtils._
-import org.apache.spark.sql.execution.streaming.state.{AvroEncoderSpec, NoPrefixKeyStateEncoderSpec, PrefixKeyScanStateEncoderSpec, RangeKeyScanStateEncoderSpec, StateStoreColFamilySchema}
+import org.apache.spark.sql.execution.streaming.state.{AvroEncoder, NoPrefixKeyStateEncoderSpec, PrefixKeyScanStateEncoderSpec, RangeKeyScanStateEncoderSpec, StateStoreColFamilySchema}
 import org.apache.spark.sql.types.{BinaryType, BooleanType, ByteType, DataType, DoubleType, FloatType, IntegerType, LongType, NullType, ShortType, StructField, StructType}
 
 object StateStoreColumnFamilySchemaUtils {
 
   def apply(initializeAvroSerde: Boolean): StateStoreColumnFamilySchemaUtils =
     new StateStoreColumnFamilySchemaUtils(initializeAvroSerde)
-
 
   /**
    * Avro uses zig-zag encoding for some fixed-length types, like Longs and Ints. For range scans
@@ -76,6 +75,16 @@ object StateStoreColumnFamilySchemaUtils {
  */
 class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) extends Logging {
 
+  private def getAvroSerdeForSchema(schema: StructType): (AvroSerializer, AvroDeserializer) = {
+    val avroType = SchemaConverters.toAvroType(schema)
+    val avroOptions = AvroOptions(Map.empty)
+    val serializer = new AvroSerializer(schema, avroType, nullable = false)
+    val deserializer = new AvroDeserializer(avroType, schema,
+      avroOptions.datetimeRebaseModeInRead, avroOptions.useStableIdForUnionType,
+      avroOptions.stableIdPrefixForUnionType, avroOptions.recursiveFieldMaxDepth)
+    (serializer, deserializer)
+  }
+
   /**
    * If initializeAvroSerde is true, this method will create an Avro Serializer and Deserializer
    * for a particular key and value schema.
@@ -84,30 +93,19 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) extends Lo
       keySchema: StructType,
       valSchema: StructType,
       suffixKeySchema: Option[StructType] = None
-  ): Option[AvroEncoderSpec] = {
+  ): Option[AvroEncoder] = {
     if (initializeAvroSerde) {
-      val avroType = SchemaConverters.toAvroType(valSchema)
-      val avroOptions = AvroOptions(Map.empty)
-      val keyAvroType = SchemaConverters.toAvroType(keySchema)
-      val keySer = new AvroSerializer(keySchema, keyAvroType, nullable = false)
-      val keyDe = new AvroDeserializer(keyAvroType, keySchema,
-        avroOptions.datetimeRebaseModeInRead, avroOptions.useStableIdForUnionType,
-        avroOptions.stableIdPrefixForUnionType, avroOptions.recursiveFieldMaxDepth)
-      val valueSerializer = new AvroSerializer(valSchema, avroType, nullable = false)
-      val valueDeserializer = new AvroDeserializer(avroType, valSchema,
-        avroOptions.datetimeRebaseModeInRead, avroOptions.useStableIdForUnionType,
-        avroOptions.stableIdPrefixForUnionType, avroOptions.recursiveFieldMaxDepth)
+      val (keySer, keyDe) =
+        getAvroSerdeForSchema(keySchema)
+      val (valueSerializer, valueDeserializer) =
+        getAvroSerdeForSchema(valSchema)
       val (suffixKeySer, suffixKeyDe) = if (suffixKeySchema.isDefined) {
-        val userKeyAvroType = SchemaConverters.toAvroType(suffixKeySchema.get)
-        val skSer = new AvroSerializer(suffixKeySchema.get, userKeyAvroType, nullable = false)
-        val skDe = new AvroDeserializer(userKeyAvroType, suffixKeySchema.get,
-          avroOptions.datetimeRebaseModeInRead, avroOptions.useStableIdForUnionType,
-          avroOptions.stableIdPrefixForUnionType, avroOptions.recursiveFieldMaxDepth)
-        (Some(skSer), Some(skDe))
+        val serde = getAvroSerdeForSchema(suffixKeySchema.get)
+        (Some(serde._1), Some(serde._2))
       } else {
         (None, None)
       }
-      Some(AvroEncoderSpec(
+      Some(AvroEncoder(
         keySer, keyDe, valueSerializer, valueDeserializer, suffixKeySer, suffixKeyDe))
     } else {
       None
@@ -164,6 +162,11 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) extends Lo
     )
   }
 
+  // This function creates the StateStoreColFamilySchema for
+  // the TTL secondary index.
+  // Because we want to encode fixed-length types as binary types
+  // if we are using Avro, we need to do some schema conversion to ensure
+  // we can use range scan
   def getTtlStateSchema(
       stateName: String,
       keyEncoder: ExpressionEncoder[Any]): StateStoreColFamilySchema = {
@@ -184,6 +187,11 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) extends Lo
     )
   }
 
+  // This function creates the StateStoreColFamilySchema for
+  // the TTL secondary index.
+  // Because we want to encode fixed-length types as binary types
+  // if we are using Avro, we need to do some schema conversion to ensure
+  // we can use range scan
   def getTtlStateSchema(
       stateName: String,
       keyEncoder: ExpressionEncoder[Any],
@@ -221,6 +229,11 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) extends Lo
       ))
   }
 
+  // This function creates the StateStoreColFamilySchema for
+  // Timers' secondary index.
+  // Because we want to encode fixed-length types as binary types
+  // if we are using Avro, we need to do some schema conversion to ensure
+  // we can use range scan
   def getTimerStateSchemaForSecIndex(
       stateName: String,
       keySchema: StructType,

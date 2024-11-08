@@ -37,7 +37,7 @@ class MemoryStateStore extends StateStore() {
       keyStateEncoderSpec: KeyStateEncoderSpec,
       useMultipleValuesPerKey: Boolean = false,
       isInternal: Boolean = false,
-      avroEnc: Option[AvroEncoderSpec]): Unit = {
+      avroEnc: Option[AvroEncoder]): Unit = {
     throw StateStoreErrors.multipleColumnFamiliesNotSupported("MemoryStateStoreProvider")
   }
 

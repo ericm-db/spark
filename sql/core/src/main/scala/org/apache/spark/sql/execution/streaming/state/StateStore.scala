@@ -144,7 +144,7 @@ trait StateStore extends ReadStateStore {
       keyStateEncoderSpec: KeyStateEncoderSpec,
       useMultipleValuesPerKey: Boolean = false,
       isInternal: Boolean = false,
-      avroEncoderSpec: Option[AvroEncoderSpec] = None): Unit
+      avroEncoderSpec: Option[AvroEncoder] = None): Unit
 
   /**
    * Put a new non-null value for a non-null key. Implementations must be aware that the UnsafeRows
