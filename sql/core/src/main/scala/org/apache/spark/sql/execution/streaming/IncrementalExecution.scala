@@ -259,13 +259,13 @@ class IncrementalExecution(
     }
   }
 
-  object StateStoreColumnFamilySchemas extends SparkPlanPartialRule {
+  object StateStoreColumnFamilySchemasRule extends SparkPlanPartialRule {
     override val rule: PartialFunction[SparkPlan, SparkPlan] = {
       case statefulOp: StatefulOperator =>
         statefulOp match {
-          case transformWithStateExec: TransformWithStateExec =>
-            transformWithStateExec.copy(
-              columnFamilySchemas = transformWithStateExec.getColFamilySchemas()
+          case op: TransformWithStateExec =>
+            op.copy(
+              columnFamilySchemas = op.getColFamilySchemas()
             )
           case _ => statefulOp
         }
@@ -565,7 +565,7 @@ class IncrementalExecution(
       // The rule below doesn't change the plan but can cause the side effect that
       // metadata/schema is written in the checkpoint directory of stateful operator.
       planWithStateOpId transform StateSchemaAndOperatorMetadataRule.rule
-      val planWithStateSchemas = planWithStateOpId transform StateStoreColumnFamilySchemas.rule
+      val planWithStateSchemas = planWithStateOpId transform StateStoreColumnFamilySchemasRule.rule
       simulateWatermarkPropagation(planWithStateSchemas)
       planWithStateSchemas transform WatermarkPropagationRule.rule
     }
