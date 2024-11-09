@@ -27,7 +27,7 @@ import org.apache.spark.sql.catalyst.expressions.{And, Attribute, AttributeSet, 
 import org.apache.spark.sql.catalyst.plans.logical.EventTimeWatermark._
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.streaming.WatermarkSupport.watermarkExpression
-import org.apache.spark.sql.execution.streaming.state.{StateStoreCheckpointInfo, StateStoreColFamilySchema, StateStoreCoordinatorRef, StateStoreProviderId}
+import org.apache.spark.sql.execution.streaming.state.{StateStoreCheckpointInfo, StateStoreCoordinatorRef, StateStoreProviderId}
 
 
 /**
@@ -318,19 +318,6 @@ object StreamingSymmetricHashJoinHelper extends Logging {
       )(f: (Int, Iterator[T], Iterator[U]) => Iterator[V]): RDD[V] = {
       new StateStoreAwareZipPartitionsRDD(
         dataRDD.sparkContext, f, dataRDD, dataRDD2, stateInfo, storeNames, Some(storeCoordinator))
-    }
-
-    def stateStoreAwareZipPartitions[U: ClassTag, V: ClassTag](
-        dataRDD2: RDD[U],
-        stateInfo: StatefulOperatorStateInfo,
-        storeNames: Seq[String],
-        storeCoordinator: StateStoreCoordinatorRef,
-        schemas: Map[String, StateStoreColFamilySchema]
-      )(f: (Int, Iterator[T], Iterator[U], Map[String, StateStoreColFamilySchema]) =>
-      Iterator[V]): RDD[V] = {
-      new StateStoreAwareZipPartitionsRDDWithSchemas(
-        dataRDD.sparkContext, f, dataRDD, dataRDD2, stateInfo,
-        storeNames, Some(storeCoordinator), schemas)
     }
   }
 

@@ -24,7 +24,7 @@ import org.apache.spark.sql.execution.streaming.TransformWithStateKeyValueRowSch
 import org.apache.spark.sql.execution.streaming.state.{AvroEncoder, NoPrefixKeyStateEncoderSpec, PrefixKeyScanStateEncoderSpec, RangeKeyScanStateEncoderSpec, StateStoreColFamilySchema}
 import org.apache.spark.sql.types.{BinaryType, BooleanType, ByteType, DataType, DoubleType, FloatType, IntegerType, LongType, NullType, ShortType, StructField, StructType}
 
-object StateStoreColumnFamilySchemaUtils {
+object StateStoreColumnFamilySchemaUtils extends Serializable {
 
   def apply(initializeAvroSerde: Boolean): StateStoreColumnFamilySchemaUtils =
     new StateStoreColumnFamilySchemaUtils(initializeAvroSerde)
@@ -73,7 +73,8 @@ object StateStoreColumnFamilySchemaUtils {
  *                            for this state type. This class is used to create the
  *                            StateStoreColumnFamilySchema for each state variable from the driver
  */
-class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean) extends Logging {
+class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean)
+    extends Logging with Serializable {
   private def getAvroSerializer(schema: StructType): AvroSerializer = {
     val avroType = SchemaConverters.toAvroType(schema)
     new AvroSerializer(schema, avroType, nullable = false)

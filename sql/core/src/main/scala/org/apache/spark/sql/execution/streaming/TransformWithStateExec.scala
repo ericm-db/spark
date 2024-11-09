@@ -23,6 +23,7 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
 
 import org.apache.spark.broadcast.Broadcast
+import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
@@ -559,8 +560,9 @@ case class TransformWithStateExec(
               store, childDataIterator, initStateIterator, columnFamilySchemas)
           } else {
             initNewStateStoreAndProcessData(
-              partitionId, hadoopConfBroadcast, columnFamilySchemas) { (store, schemas) =>
-              processDataWithInitialState(store, childDataIterator, initStateIterator, schemas)
+              partitionId, hadoopConfBroadcast) { store =>
+              processDataWithInitialState(
+                store, childDataIterator, initStateIterator, columnFamilySchemas)
             }
           }
       }
@@ -586,8 +588,8 @@ case class TransformWithStateExec(
         child.execute().mapPartitionsWithIndex[InternalRow](
           (i: Int, iter: Iterator[InternalRow]) => {
             initNewStateStoreAndProcessData(
-              i, hadoopConfBroadcast, columnFamilySchemas) { (store, schemas) =>
-              processData(store, iter, schemas)
+              i, hadoopConfBroadcast) { store =>
+              processData(store, iter, columnFamilySchemas)
             }
           }
         )
@@ -601,9 +603,8 @@ case class TransformWithStateExec(
    */
   private def initNewStateStoreAndProcessData(
       partitionId: Int,
-      hadoopConfBroadcast: Broadcast[SerializableConfiguration],
-      schemas: Map[String, StateStoreColFamilySchema])
-    (f: (StateStore, Map[String, StateStoreColFamilySchema]) =>
+      hadoopConfBroadcast: Broadcast[SerializableConfiguration])
+    (f: StateStore =>
       CompletionIterator[InternalRow, Iterator[InternalRow]]):
     CompletionIterator[InternalRow, Iterator[InternalRow]] = {
 
@@ -630,7 +631,7 @@ case class TransformWithStateExec(
       useMultipleValuesPerKey = true)
 
     val store = stateStoreProvider.getStore(0)
-    val outputIterator = f(store, schemas)
+    val outputIterator = f(store)
     CompletionIterator[InternalRow, Iterator[InternalRow]](outputIterator.iterator, {
       stateStoreProvider.close()
       statefulProcessor.close()
@@ -702,7 +703,7 @@ case class TransformWithStateExec(
 }
 
 // scalastyle:off argcount
-object TransformWithStateExec {
+object TransformWithStateExec extends Logging {
 
   // Plan logical transformWithState for batch queries
   def generateSparkPlanForBatchQueries(
