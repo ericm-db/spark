@@ -483,8 +483,6 @@ class RangeKeyScanStateEncoder(
     StructType(rangeScanKeyFieldsWithOrdinal.map(_._1).toArray))
 
   private lazy val rangeScanAvroType = SchemaConverters.toAvroType(rangeScanAvroSchema)
-  logError(s"### rangeScanAvroSchema: $rangeScanAvroSchema")
-  logError(s"### rangeScanAvroType: $rangeScanAvroType")
 
   private val rangeScanAvroProjection = UnsafeProjection.create(rangeScanAvroSchema)
 
@@ -696,18 +694,18 @@ class RangeKeyScanStateEncoder(
       val field = fieldWithOrdinal._1
       val value = row.get(idx, field.dataType)
       if (value == null) {
-        record.put(fieldIdx, false) // isNull marker
+        record.put(fieldIdx, nullValMarker) // isNull marker
         record.put(fieldIdx + 1, new Array[Byte](field.dataType.defaultSize))
       } else {
         field.dataType match {
           case BooleanType =>
             val boolVal = value.asInstanceOf[Boolean]
-            record.put(fieldIdx, true) // not null marker
+            record.put(fieldIdx, positiveValMarker) // not null marker
             record.put(fieldIdx + 1, ByteBuffer.wrap(Array[Byte](if (boolVal) 1 else 0)))
 
           case ByteType =>
             val byteVal = value.asInstanceOf[Byte]
-            val marker = byteVal >= 0
+            val marker = positiveValMarker
             record.put(fieldIdx, marker)
 
             val bytes = new Array[Byte](1)
@@ -716,7 +714,7 @@ class RangeKeyScanStateEncoder(
 
           case ShortType =>
             val shortVal = value.asInstanceOf[Short]
-            val marker = shortVal >= 0
+            val marker = if (shortVal >= 0) positiveValMarker else negativeValMarker
             record.put(fieldIdx, marker)
 
             val bbuf = ByteBuffer.allocate(2)
@@ -729,7 +727,7 @@ class RangeKeyScanStateEncoder(
 
           case IntegerType =>
             val intVal = value.asInstanceOf[Int]
-            val marker = intVal >= 0
+            val marker = if (intVal >= 0) positiveValMarker else negativeValMarker
             record.put(fieldIdx, marker)
 
             val bbuf = ByteBuffer.allocate(4)
@@ -742,7 +740,7 @@ class RangeKeyScanStateEncoder(
 
           case LongType =>
             val longVal = value.asInstanceOf[Long]
-            val marker = longVal >= 0
+            val marker = if (longVal >= 0) positiveValMarker else negativeValMarker
             record.put(fieldIdx, marker)
 
             val bbuf = ByteBuffer.allocate(8)
@@ -756,16 +754,16 @@ class RangeKeyScanStateEncoder(
           case FloatType =>
             val floatVal = value.asInstanceOf[Float]
             val rawBits = floatToRawIntBits(floatVal)
-            val marker = (rawBits & floatSignBitMask) == 0
-            record.put(fieldIdx, marker)
 
             val bbuf = ByteBuffer.allocate(4)
             bbuf.order(ByteOrder.BIG_ENDIAN)
-            if (!marker) {
+            if ((rawBits & floatSignBitMask) != 0) {
+              record.put(fieldIdx, negativeValMarker)
               // For negative values, flip the bits to maintain proper ordering
               val updatedVal = rawBits ^ floatFlipBitMask
               bbuf.putFloat(intBitsToFloat(updatedVal))
             } else {
+              record.put(fieldIdx, positiveValMarker)
               bbuf.putFloat(floatVal)
             }
             val bytes = new Array[Byte](4)
@@ -776,16 +774,16 @@ class RangeKeyScanStateEncoder(
           case DoubleType =>
             val doubleVal = value.asInstanceOf[Double]
             val rawBits = doubleToRawLongBits(doubleVal)
-            val marker = (rawBits & doubleSignBitMask) == 0
-            record.put(fieldIdx, marker)
 
             val bbuf = ByteBuffer.allocate(8)
             bbuf.order(ByteOrder.BIG_ENDIAN)
-            if (!marker) {
+            if ((rawBits & doubleSignBitMask) != 0) {
               // For negative values, flip the bits to maintain proper ordering
+              record.put(fieldIdx, negativeValMarker)
               val updatedVal = rawBits ^ doubleFlipBitMask
               bbuf.putDouble(longBitsToDouble(updatedVal))
             } else {
+              record.put(fieldIdx, positiveValMarker)
               bbuf.putDouble(doubleVal)
             }
             val bytes = new Array[Byte](8)
@@ -822,7 +820,7 @@ class RangeKeyScanStateEncoder(
     var fieldIdx = 0
     rangeScanKeyFieldsWithOrdinal.zipWithIndex.foreach { case (fieldWithOrdinal, idx) =>
       val field = fieldWithOrdinal._1
-      val isMarkerNull = record.get(fieldIdx) == null
+      val isMarkerNull = record.get(fieldIdx) == nullValMarker
 
       if (isMarkerNull) {
         rowWriter.setNullAt(idx)
@@ -867,7 +865,7 @@ class RangeKeyScanStateEncoder(
             bbuf.put(byteBuf.array(), byteBuf.position(), byteBuf.remaining())
             bbuf.flip()
 
-            val isNegative = !record.get(fieldIdx).asInstanceOf[Boolean]
+            val isNegative = record.get(fieldIdx).asInstanceOf[Byte] == negativeValMarker
             if (isNegative) {
               val floatVal = bbuf.getFloat
               val updatedVal = floatToRawIntBits(floatVal) ^ floatFlipBitMask
@@ -883,7 +881,7 @@ class RangeKeyScanStateEncoder(
             bbuf.put(byteBuf.array(), byteBuf.position(), byteBuf.remaining())
             bbuf.flip()
 
-            val isNegative = !record.get(fieldIdx).asInstanceOf[Boolean]
+            val isNegative = record.get(fieldIdx).asInstanceOf[Byte] == negativeValMarker
             if (isNegative) {
               val doubleVal = bbuf.getDouble
               val updatedVal = doubleToRawLongBits(doubleVal) ^ doubleFlipBitMask

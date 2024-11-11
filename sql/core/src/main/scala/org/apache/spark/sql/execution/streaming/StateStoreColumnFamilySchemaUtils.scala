@@ -47,7 +47,7 @@ object StateStoreColumnFamilySchemaUtils extends Serializable {
         // 1. A boolean for sign (positive = true, negative = false)
         // 2. The original numeric value in big-endian format
         Seq(
-          StructField(s"${field.name}_marker", BooleanType, nullable = false),
+          StructField(s"${field.name}_marker", ByteType, nullable = false),
           field.copy(name = s"${field.name}_value", BinaryType)
         )
       } else {
@@ -184,7 +184,7 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean)
       ttlValSchema,
       Some(RangeKeyScanStateEncoderSpec(ttlKeySchema, Seq(0))),
       avroEnc = getAvroSerde(
-        StructType(ttlKeySchema.take(2)),
+        getSingleKeyTTLRowSchema(keyEncoder.schema),
         ttlValSchema,
         Some(StructType(ttlKeySchema.drop(2)))
       )
@@ -210,7 +210,7 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean)
       ttlValSchema,
       Some(RangeKeyScanStateEncoderSpec(ttlKeySchema, Seq(0))),
       avroEnc = getAvroSerde(
-        StructType(ttlKeySchema.take(2)),
+        getCompositeKeyTTLRowSchema(keyEncoder.schema, userKeySchema),
         ttlValSchema,
         Some(StructType(ttlKeySchema.drop(2)))
       )
@@ -250,7 +250,7 @@ class StateStoreColumnFamilySchemaUtils(initializeAvroSerde: Boolean)
       valSchema,
       Some(RangeKeyScanStateEncoderSpec(keySchema, Seq(0))),
       avroEnc = getAvroSerde(
-        StructType(avroKeySchema.take(2)),
+        keySchema,
         valSchema,
         Some(StructType(avroKeySchema.drop(2)))
       ))

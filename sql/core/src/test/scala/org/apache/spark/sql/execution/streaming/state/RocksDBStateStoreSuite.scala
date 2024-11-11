@@ -358,7 +358,7 @@ class RocksDBStateStoreSuite extends StateStoreSuiteBase[RocksDBStateStoreProvid
       val convertedKeySchema = StateStoreColumnFamilySchemaUtils.convertForRangeScan(
         keySchemaWithLong)
       val avroSerde = StateStoreColumnFamilySchemaUtils(true).getAvroSerde(
-        StructType(convertedKeySchema.drop(1)),
+        keySchemaWithLong,
         valueSchema,
         Some(remainingKeySchema)
       )
