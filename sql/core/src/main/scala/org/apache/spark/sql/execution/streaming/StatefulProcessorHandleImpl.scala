@@ -122,6 +122,14 @@ class StatefulProcessorHandleImpl(
 
   currState = CREATED
 
+  private def getAvroEnc(stateName: String): Option[AvroEncoder] = {
+    if (!schemas.contains(stateName)) {
+      None
+    } else {
+      schemas(stateName).avroEnc
+    }
+  }
+
   private def buildQueryInfo(): QueryInfo = {
     val taskCtxOpt = Option(TaskContext.get())
     val (queryId, batchId) = if (!isStreaming) {
@@ -146,8 +154,8 @@ class StatefulProcessorHandleImpl(
   private lazy val timerSecIndexColFamily = TimerStateUtils.getSecIndexColFamilyName(
     timeMode.toString)
   private lazy val timerState = new TimerStateImpl(
-    store, timeMode, keyEncoder, schemas(timerStateName).avroEnc,
-    schemas(timerSecIndexColFamily).avroEnc)
+    store, timeMode, keyEncoder, getAvroEnc(timerStateName),
+    getAvroEnc(timerSecIndexColFamily))
 
   /**
    * Function to register a timer for the given expiryTimestampMs
@@ -238,13 +246,13 @@ class StatefulProcessorHandleImpl(
       assert(batchTimestampMs.isDefined)
       val valueStateWithTTL = new ValueStateImplWithTTL[T](store, stateName,
         keyEncoder, stateEncoder, ttlConfig, batchTimestampMs.get, metrics,
-        schemas(stateName).avroEnc, schemas(getTtlColFamilyName(stateName)).avroEnc)
+        getAvroEnc(stateName), getAvroEnc(getTtlColFamilyName(stateName)))
       ttlStates.add(valueStateWithTTL)
       TWSMetricsUtils.incrementMetric(metrics, "numValueStateWithTTLVars")
       valueStateWithTTL
     } else {
       val valueStateWithoutTTL = new ValueStateImpl[T](store, stateName,
-        keyEncoder, stateEncoder, metrics, schemas(stateName).avroEnc)
+        keyEncoder, stateEncoder, metrics, getAvroEnc(stateName))
       TWSMetricsUtils.incrementMetric(metrics, "numValueStateVars")
       valueStateWithoutTTL
     }
@@ -288,13 +296,13 @@ class StatefulProcessorHandleImpl(
       assert(batchTimestampMs.isDefined)
       val listStateWithTTL = new ListStateImplWithTTL[T](store, stateName,
         keyEncoder, stateEncoder, ttlConfig, batchTimestampMs.get, metrics,
-        schemas(stateName).avroEnc, schemas(getTtlColFamilyName(stateName)).avroEnc)
+        getAvroEnc(stateName), getAvroEnc(getTtlColFamilyName(stateName)))
       TWSMetricsUtils.incrementMetric(metrics, "numListStateWithTTLVars")
       ttlStates.add(listStateWithTTL)
       listStateWithTTL
     } else {
       val listStateWithoutTTL = new ListStateImpl[T](store, stateName, keyEncoder,
-        stateEncoder, metrics, schemas(stateName).avroEnc)
+        stateEncoder, metrics, getAvroEnc(stateName))
       TWSMetricsUtils.incrementMetric(metrics, "numListStateVars")
       listStateWithoutTTL
     }
@@ -327,13 +335,13 @@ class StatefulProcessorHandleImpl(
       assert(batchTimestampMs.isDefined)
       val mapStateWithTTL = new MapStateImplWithTTL[K, V](store, stateName, keyEncoder, userKeyEnc,
         valEncoder, ttlConfig, batchTimestampMs.get, metrics,
-        schemas(stateName).avroEnc, schemas(getTtlColFamilyName(stateName)).avroEnc)
+        getAvroEnc(stateName), getAvroEnc(getTtlColFamilyName(stateName)))
       TWSMetricsUtils.incrementMetric(metrics, "numMapStateWithTTLVars")
       ttlStates.add(mapStateWithTTL)
       mapStateWithTTL
     } else {
       val mapStateWithoutTTL = new MapStateImpl[K, V](store, stateName, keyEncoder,
-        userKeyEnc, valEncoder, metrics, schemas(stateName).avroEnc)
+        userKeyEnc, valEncoder, metrics, getAvroEnc(stateName))
       TWSMetricsUtils.incrementMetric(metrics, "numMapStateVars")
       mapStateWithoutTTL
     }
