@@ -1847,6 +1847,12 @@ object StateStoreTestsHelper {
     rangeScanProj.apply(new GenericInternalRow(Array[Any](ts, UTF8String.fromString(s)))).copy()
   }
 
+  def dataToKeyRowWithRangeScan(s: String, ts: Long, otherLong: Long): UnsafeRow = {
+    UnsafeProjection.create(Array[DataType](StringType, LongType, StringType, LongType))
+      .apply(new GenericInternalRow(Array[Any](UTF8String.fromString(s), ts,
+        UTF8String.fromString(s), otherLong))).copy()
+  }
+
   def dataToValueRow(i: Int): UnsafeRow = {
     valueProj.apply(new GenericInternalRow(Array[Any](i))).copy()
   }

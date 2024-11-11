@@ -31,7 +31,7 @@ import org.apache.spark.sql.LocalSparkSession.withSparkSession
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.expressions.{GenericInternalRow, UnsafeProjection, UnsafeRow}
 import org.apache.spark.sql.catalyst.util.quietly
-import org.apache.spark.sql.execution.streaming.StatefulOperatorStateInfo
+import org.apache.spark.sql.execution.streaming.{StatefulOperatorStateInfo, StateStoreColumnFamilySchemaUtils}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
 import org.apache.spark.sql.types._
@@ -336,6 +336,83 @@ class RocksDBStateStoreSuite extends StateStoreSuiteBase[RocksDBStateStoreProvid
         key._1
       }.toSeq
       assert(result1 === (timerTimestamps ++ timerTimestamps1).sorted)
+    }
+  }
+
+  test("rocksdb range scan - fixed size non-ordering columns with Avro encoding") {
+
+
+    val keySchemaWithLong: StructType = StructType(
+      Seq(StructField("key1", StringType, false), StructField("key2", LongType, false),
+        StructField("key3", StringType, false), StructField("key4", LongType, false)))
+
+    val remainingKeySchema: StructType = StructType(
+      Seq(StructField("key1", StringType, false), StructField("key3", StringType, false)))
+    tryWithProviderResource(newStoreProvider(keySchemaWithLong,
+      RangeKeyScanStateEncoderSpec(keySchemaWithLong, Seq(1, 3)),
+      useColumnFamilies = true)) { provider =>
+      val store = provider.getStore(0)
+
+      // use non-default col family if column families are enabled
+      val cfName = "testColFamily"
+      val convertedKeySchema = StateStoreColumnFamilySchemaUtils.convertForRangeScan(
+        keySchemaWithLong)
+      val avroSerde = StateStoreColumnFamilySchemaUtils(true).getAvroSerde(
+        StructType(convertedKeySchema.drop(1)),
+        valueSchema,
+        Some(remainingKeySchema)
+      )
+      store.createColFamilyIfAbsent(cfName,
+        keySchemaWithLong, valueSchema,
+        RangeKeyScanStateEncoderSpec(keySchemaWithLong, Seq(1, 3)),
+        avroEncoderSpec = avroSerde)
+
+      val timerTimestamps = Seq(931L, 8000L, 452300L, 4200L, -1L, 90L, 1L, 2L, 8L,
+        -230L, -14569L, -92L, -7434253L, 35L, 6L, 9L, -323L, 5L)
+      val otherLongs = Seq(3L, 2L, 1L)
+
+      // Create all combinations using flatMap
+      val testPairs = timerTimestamps.flatMap { ts1 =>
+        timerTimestamps.map { ts2 =>
+          (ts1, ts2)
+        }
+      }
+
+      testPairs.foreach { ts =>
+        // non-timestamp col is of fixed size
+        val keyRow = dataToKeyRowWithRangeScan("a", ts._1, ts._2)
+        val valueRow = dataToValueRow(1)
+        store.put(keyRow, valueRow, cfName)
+        assert(valueRowToData(store.get(keyRow, cfName)) === 1)
+      }
+
+      val result = store.iterator(cfName).map { kv =>
+        (kv.key.getLong(1), kv.key.getLong(3))
+      }.toSeq
+      assert(result === testPairs.sortBy(pair => (pair._1, pair._2)))
+      store.commit()
+
+      // test with a different set of power of 2 timestamps
+      val store1 = provider.getStore(1)
+      val timerTimestamps1 = Seq(-32L, -64L, -256L, 64L, 32L, 1024L, 4096L, 0L)
+      val testPairs1 = timerTimestamps1.flatMap { ts1 =>
+        otherLongs.map { ts2 =>
+          (ts1, ts2)
+        }
+      }
+      testPairs1.foreach { ts =>
+        // non-timestamp col is of fixed size
+        val keyRow = dataToKeyRowWithRangeScan("a", ts._1, ts._2)
+        val valueRow = dataToValueRow(1)
+        store1.put(keyRow, valueRow, cfName)
+        assert(valueRowToData(store1.get(keyRow, cfName)) === 1)
+      }
+
+      val result1 = store1.iterator(cfName).map { kv =>
+        (kv.key.getLong(1), kv.key.getLong(3))
+      }.toSeq
+      logError(s"### result1: ${result1}")
+      assert(result1 === (testPairs ++ testPairs1).sortBy(pair => (pair._1, pair._2)))
     }
   }
 

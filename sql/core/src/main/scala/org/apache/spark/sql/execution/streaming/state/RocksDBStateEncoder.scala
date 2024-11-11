@@ -159,7 +159,7 @@ object RocksDBStateEncoder extends Logging {
   /**
    * This method takes an UnsafeRow, and serializes to a byte array using Avro encoding.
    */
-  def encodeUnsafeRow(
+  def encodeUnsafeRowToAvro(
      row: UnsafeRow,
      avroSerializer: AvroSerializer,
      valueAvroType: Schema,
@@ -189,7 +189,7 @@ object RocksDBStateEncoder extends Logging {
    * This method takes a byte array written using Avro encoding, and
    * deserializes to an UnsafeRow using the Avro deserializer
    */
-  def decodeToUnsafeRow(
+  def decodeFromAvroToUnsafeRow(
       valueBytes: Array[Byte],
       avroDeserializer: AvroDeserializer,
       valueAvroType: Schema,
@@ -279,13 +279,13 @@ class PrefixKeyScanStateEncoder(
   override def encodeKey(row: UnsafeRow): Array[Byte] = {
     val (prefixKeyEncoded, remainingEncoded) = if (usingAvroEncoding) {
       (
-        encodeUnsafeRow(
+        encodeUnsafeRowToAvro(
           extractPrefixKey(row),
           avroEnc.get.keySerializer,
           prefixKeyAvroType,
           out
         ),
-        encodeUnsafeRow(
+        encodeUnsafeRowToAvro(
           remainingKeyProjection(row),
           avroEnc.get.suffixKeySerializer.get,
           remainingKeyAvroType,
@@ -327,13 +327,13 @@ class PrefixKeyScanStateEncoder(
 
     val (prefixKeyDecoded, remainingKeyDecoded) = if (usingAvroEncoding) {
       (
-        decodeToUnsafeRow(
+        decodeFromAvroToUnsafeRow(
           prefixKeyEncoded,
           avroEnc.get.keyDeserializer,
           prefixKeyAvroType,
           prefixKeyProj
         ),
-        decodeToUnsafeRow(
+        decodeFromAvroToUnsafeRow(
           remainingKeyEncoded,
           avroEnc.get.suffixKeyDeserializer.get,
           remainingKeyAvroType,
@@ -354,7 +354,7 @@ class PrefixKeyScanStateEncoder(
 
   override def encodePrefixKey(prefixKey: UnsafeRow): Array[Byte] = {
     val prefixKeyEncoded = if (usingAvroEncoding) {
-      encodeUnsafeRow(prefixKey, avroEnc.get.keySerializer, prefixKeyAvroType, out)
+      encodeUnsafeRowToAvro(prefixKey, avroEnc.get.keySerializer, prefixKeyAvroType, out)
     } else {
       encodeUnsafeRow(prefixKey)
     }
@@ -483,6 +483,8 @@ class RangeKeyScanStateEncoder(
     StructType(rangeScanKeyFieldsWithOrdinal.map(_._1).toArray))
 
   private lazy val rangeScanAvroType = SchemaConverters.toAvroType(rangeScanAvroSchema)
+  logError(s"### rangeScanAvroSchema: $rangeScanAvroSchema")
+  logError(s"### rangeScanAvroType: $rangeScanAvroType")
 
   private val rangeScanAvroProjection = UnsafeProjection.create(rangeScanAvroSchema)
 
@@ -698,21 +700,97 @@ class RangeKeyScanStateEncoder(
         record.put(fieldIdx + 1, new Array[Byte](field.dataType.defaultSize))
       } else {
         field.dataType match {
+          case BooleanType =>
+            val boolVal = value.asInstanceOf[Boolean]
+            record.put(fieldIdx, true) // not null marker
+            record.put(fieldIdx + 1, ByteBuffer.wrap(Array[Byte](if (boolVal) 1 else 0)))
+
+          case ByteType =>
+            val byteVal = value.asInstanceOf[Byte]
+            val marker = byteVal >= 0
+            record.put(fieldIdx, marker)
+
+            val bytes = new Array[Byte](1)
+            bytes(0) = byteVal
+            record.put(fieldIdx + 1, ByteBuffer.wrap(bytes))
+
+          case ShortType =>
+            val shortVal = value.asInstanceOf[Short]
+            val marker = shortVal >= 0
+            record.put(fieldIdx, marker)
+
+            val bbuf = ByteBuffer.allocate(2)
+            bbuf.order(ByteOrder.BIG_ENDIAN)
+            bbuf.putShort(shortVal)
+            val bytes = new Array[Byte](2)
+            bbuf.position(0)
+            bbuf.get(bytes)
+            record.put(fieldIdx + 1, ByteBuffer.wrap(bytes))
+
+          case IntegerType =>
+            val intVal = value.asInstanceOf[Int]
+            val marker = intVal >= 0
+            record.put(fieldIdx, marker)
+
+            val bbuf = ByteBuffer.allocate(4)
+            bbuf.order(ByteOrder.BIG_ENDIAN)
+            bbuf.putInt(intVal)
+            val bytes = new Array[Byte](4)
+            bbuf.position(0)
+            bbuf.get(bytes)
+            record.put(fieldIdx + 1, ByteBuffer.wrap(bytes))
+
           case LongType =>
             val longVal = value.asInstanceOf[Long]
             val marker = longVal >= 0
             record.put(fieldIdx, marker)
 
-            // Convert long to byte array in big endian format
             val bbuf = ByteBuffer.allocate(8)
             bbuf.order(ByteOrder.BIG_ENDIAN)
             bbuf.putLong(longVal)
-            // Create a new byte array to avoid Avro's issue with direct ByteBuffer arrays
             val bytes = new Array[Byte](8)
             bbuf.position(0)
             bbuf.get(bytes)
+            record.put(fieldIdx + 1, ByteBuffer.wrap(bytes))
 
-            // Wrap bytes in Avro's ByteBuffer to ensure proper handling
+          case FloatType =>
+            val floatVal = value.asInstanceOf[Float]
+            val rawBits = floatToRawIntBits(floatVal)
+            val marker = (rawBits & floatSignBitMask) == 0
+            record.put(fieldIdx, marker)
+
+            val bbuf = ByteBuffer.allocate(4)
+            bbuf.order(ByteOrder.BIG_ENDIAN)
+            if (!marker) {
+              // For negative values, flip the bits to maintain proper ordering
+              val updatedVal = rawBits ^ floatFlipBitMask
+              bbuf.putFloat(intBitsToFloat(updatedVal))
+            } else {
+              bbuf.putFloat(floatVal)
+            }
+            val bytes = new Array[Byte](4)
+            bbuf.position(0)
+            bbuf.get(bytes)
+            record.put(fieldIdx + 1, ByteBuffer.wrap(bytes))
+
+          case DoubleType =>
+            val doubleVal = value.asInstanceOf[Double]
+            val rawBits = doubleToRawLongBits(doubleVal)
+            val marker = (rawBits & doubleSignBitMask) == 0
+            record.put(fieldIdx, marker)
+
+            val bbuf = ByteBuffer.allocate(8)
+            bbuf.order(ByteOrder.BIG_ENDIAN)
+            if (!marker) {
+              // For negative values, flip the bits to maintain proper ordering
+              val updatedVal = rawBits ^ doubleFlipBitMask
+              bbuf.putDouble(longBitsToDouble(updatedVal))
+            } else {
+              bbuf.putDouble(doubleVal)
+            }
+            val bytes = new Array[Byte](8)
+            bbuf.position(0)
+            bbuf.get(bytes)
             record.put(fieldIdx + 1, ByteBuffer.wrap(bytes))
 
           case _ => throw new UnsupportedOperationException(
@@ -750,18 +828,69 @@ class RangeKeyScanStateEncoder(
         rowWriter.setNullAt(idx)
       } else {
         field.dataType match {
+          case BooleanType =>
+            val bytes = record.get(fieldIdx + 1).asInstanceOf[ByteBuffer].array()
+            rowWriter.write(idx, bytes(0) == 1)
+
+          case ByteType =>
+            val bytes = record.get(fieldIdx + 1).asInstanceOf[ByteBuffer].array()
+            rowWriter.write(idx, bytes(0))
+
+          case ShortType =>
+            val byteBuf = record.get(fieldIdx + 1).asInstanceOf[ByteBuffer]
+            val bbuf = ByteBuffer.allocate(2)
+            bbuf.order(ByteOrder.BIG_ENDIAN)
+            bbuf.put(byteBuf.array(), byteBuf.position(), byteBuf.remaining())
+            bbuf.flip()
+            rowWriter.write(idx, bbuf.getShort)
+
+          case IntegerType =>
+            val byteBuf = record.get(fieldIdx + 1).asInstanceOf[ByteBuffer]
+            val bbuf = ByteBuffer.allocate(4)
+            bbuf.order(ByteOrder.BIG_ENDIAN)
+            bbuf.put(byteBuf.array(), byteBuf.position(), byteBuf.remaining())
+            bbuf.flip()
+            rowWriter.write(idx, bbuf.getInt)
+
           case LongType =>
-            // Get bytes from Avro ByteBuffer
             val byteBuf = record.get(fieldIdx + 1).asInstanceOf[ByteBuffer]
             val bbuf = ByteBuffer.allocate(8)
             bbuf.order(ByteOrder.BIG_ENDIAN)
+            bbuf.put(byteBuf.array(), byteBuf.position(), byteBuf.remaining())
+            bbuf.flip()
+            rowWriter.write(idx, bbuf.getLong)
 
-            // Copy bytes to our ByteBuffer
+          case FloatType =>
+            val byteBuf = record.get(fieldIdx + 1).asInstanceOf[ByteBuffer]
+            val bbuf = ByteBuffer.allocate(4)
+            bbuf.order(ByteOrder.BIG_ENDIAN)
             bbuf.put(byteBuf.array(), byteBuf.position(), byteBuf.remaining())
             bbuf.flip()
 
-            val longVal = bbuf.getLong(fieldIdx)
-            rowWriter.write(idx, longVal)
+            val isNegative = !record.get(fieldIdx).asInstanceOf[Boolean]
+            if (isNegative) {
+              val floatVal = bbuf.getFloat
+              val updatedVal = floatToRawIntBits(floatVal) ^ floatFlipBitMask
+              rowWriter.write(idx, intBitsToFloat(updatedVal))
+            } else {
+              rowWriter.write(idx, bbuf.getFloat)
+            }
+
+          case DoubleType =>
+            val byteBuf = record.get(fieldIdx + 1).asInstanceOf[ByteBuffer]
+            val bbuf = ByteBuffer.allocate(8)
+            bbuf.order(ByteOrder.BIG_ENDIAN)
+            bbuf.put(byteBuf.array(), byteBuf.position(), byteBuf.remaining())
+            bbuf.flip()
+
+            val isNegative = !record.get(fieldIdx).asInstanceOf[Boolean]
+            if (isNegative) {
+              val doubleVal = bbuf.getDouble
+              val updatedVal = doubleToRawLongBits(doubleVal) ^ doubleFlipBitMask
+              rowWriter.write(idx, longBitsToDouble(updatedVal))
+            } else {
+              rowWriter.write(idx, bbuf.getDouble)
+            }
 
           case _ => throw new UnsupportedOperationException(
             s"Range scan decoding not supported for data type: ${field.dataType}")
@@ -784,7 +913,7 @@ class RangeKeyScanStateEncoder(
 
     val result = if (orderingOrdinals.length < keySchema.length) {
       val remainingEncoded = if (avroEnc.isDefined) {
-        encodeUnsafeRow(
+        encodeUnsafeRowToAvro(
           remainingKeyProjection(row),
           avroEnc.get.suffixKeySerializer.get,
           remainingKeyAvroType,
@@ -847,7 +976,7 @@ class RangeKeyScanStateEncoder(
         remainingKeyEncodedLen)
 
       val remainingKeyDecoded = if (avroEnc.isDefined) {
-        decodeToUnsafeRow(remainingKeyEncoded,
+        decodeFromAvroToUnsafeRow(remainingKeyEncoded,
           avroEnc.get.suffixKeyDeserializer.get,
           remainingKeyAvroType, remainingKeyAvroProjection)
       } else {
@@ -917,7 +1046,7 @@ class NoPrefixKeyStateEncoder(
       // If avroEnc is defined, we know that we need to use Avro to
       // encode this UnsafeRow to Avro bytes
       val bytesToEncode = if (usingAvroEncoding) {
-        encodeUnsafeRow(row, avroEnc.get.keySerializer, keyAvroType, out)
+        encodeUnsafeRowToAvro(row, avroEnc.get.keySerializer, keyAvroType, out)
       } else row.getBytes
       val (encodedBytes, startingOffset) = encodeColumnFamilyPrefix(
         bytesToEncode.length +
@@ -952,7 +1081,7 @@ class NoPrefixKeyStateEncoder(
             0,
             avroBytes.length
           )
-          decodeToUnsafeRow(
+          decodeFromAvroToUnsafeRow(
             keyBytes, avroEnc.get.keyDeserializer, keyAvroType, keyProj)
         } else {
           keyRow.pointTo(
@@ -1004,7 +1133,7 @@ class MultiValuedStateEncoder(
 
   override def encodeValue(row: UnsafeRow): Array[Byte] = {
     val bytes = if (usingAvroEncoding) {
-      encodeUnsafeRow(row, avroEnc.get.valueSerializer, valueAvroType, out)
+      encodeUnsafeRowToAvro(row, avroEnc.get.valueSerializer, valueAvroType, out)
     } else {
       encodeUnsafeRow(row)
     }
@@ -1027,7 +1156,7 @@ class MultiValuedStateEncoder(
       Platform.copyMemory(valueBytes, java.lang.Integer.BYTES + Platform.BYTE_ARRAY_OFFSET,
         encodedValue, Platform.BYTE_ARRAY_OFFSET, numBytes)
       if (usingAvroEncoding) {
-        decodeToUnsafeRow(
+        decodeFromAvroToUnsafeRow(
           encodedValue, avroEnc.get.valueDeserializer, valueAvroType, valueProj)
       } else {
         decodeToUnsafeRow(encodedValue, valueRow)
@@ -1058,7 +1187,7 @@ class MultiValuedStateEncoder(
           pos += numBytes
           pos += 1 // eat the delimiter character
           if (usingAvroEncoding) {
-            decodeToUnsafeRow(
+            decodeFromAvroToUnsafeRow(
               encodedValue, avroEnc.get.valueDeserializer, valueAvroType, valueProj)
           } else {
             decodeToUnsafeRow(encodedValue, valueRow)
@@ -1100,7 +1229,7 @@ class SingleValueStateEncoder(
 
   override def encodeValue(row: UnsafeRow): Array[Byte] = {
     if (usingAvroEncoding) {
-      encodeUnsafeRow(row, avroEnc.get.valueSerializer, valueAvroType, out)
+      encodeUnsafeRowToAvro(row, avroEnc.get.valueSerializer, valueAvroType, out)
     } else {
       encodeUnsafeRow(row)
     }
@@ -1117,7 +1246,7 @@ class SingleValueStateEncoder(
       return null
     }
     if (usingAvroEncoding) {
-      decodeToUnsafeRow(
+      decodeFromAvroToUnsafeRow(
         valueBytes, avroEnc.get.valueDeserializer, valueAvroType, valueProj)
     } else {
       decodeToUnsafeRow(valueBytes, valueRow)
