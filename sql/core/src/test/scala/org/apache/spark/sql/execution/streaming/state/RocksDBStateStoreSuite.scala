@@ -411,7 +411,6 @@ class RocksDBStateStoreSuite extends StateStoreSuiteBase[RocksDBStateStoreProvid
       val result1 = store1.iterator(cfName).map { kv =>
         (kv.key.getLong(1), kv.key.getLong(3))
       }.toSeq
-      logError(s"### result1: ${result1}")
       assert(result1 === (testPairs ++ testPairs1).sortBy(pair => (pair._1, pair._2)))
     }
   }
