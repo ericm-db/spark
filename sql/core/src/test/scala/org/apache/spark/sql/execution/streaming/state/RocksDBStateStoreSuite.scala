@@ -49,6 +49,10 @@ class RocksDBStateStoreSuite extends StateStoreSuiteBase[RocksDBStateStoreProvid
   with SharedSparkSession
   with BeforeAndAfter {
 
+  def getLatestVersion(provider: RocksDBStateStoreProvider): Long = {
+    provider.latestVersion
+  }
+
   before {
     StateStore.stop()
     require(!StateStore.isMaintenanceRunning)
@@ -2400,6 +2404,10 @@ class RocksDBStateStoreSuite extends StateStoreSuiteBase[RocksDBStateStoreProvid
       val versionToRead = if (version < 0) reloadedProvider.latestVersion else version
       reloadedProvider.getStore(versionToRead).iterator().map(rowPairToDataPair).toSet
     }
+  }
+
+  override def getData(store: StateStore): Set[((String, Int), Int)] = {
+    store.iterator().map(rowPairToDataPair).toSet
   }
 
   override def newStoreProvider(

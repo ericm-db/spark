@@ -423,8 +423,9 @@ private[sql] class HDFSBackedStateStoreProvider extends StateStoreProvider with 
   // implementations
   @volatile private var isValidated = false
 
-  private lazy val loadedMaps = new util.TreeMap[Long, HDFSBackedStateStoreMap](
+  private[state] lazy val loadedMaps = new util.TreeMap[Long, HDFSBackedStateStoreMap](
     Ordering[Long].reverse)
+
   private lazy val baseDir = stateStoreId.storeCheckpointLocation()
   private lazy val fm = CheckpointFileManager.create(baseDir, hadoopConf)
   private lazy val sparkConf = Option(SparkEnv.get).map(_.conf).getOrElse(new SparkConf)

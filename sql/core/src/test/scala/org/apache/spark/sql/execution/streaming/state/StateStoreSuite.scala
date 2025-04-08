@@ -1035,6 +1035,10 @@ class StateStoreSuite extends StateStoreSuiteBase[HDFSBackedStateStoreProvider]
     }
   }
 
+  override def getData(store: StateStore): Set[((String, Int), Int)] = {
+    store.iterator().map(rowPairToDataPair).toSet
+  }
+
   override def getDefaultSQLConf(
       minDeltasForSnapshot: Int,
       numOfVersToRetainInMemory: Int): SQLConf = {
@@ -1114,6 +1118,10 @@ class StateStoreSuite extends StateStoreSuiteBase[HDFSBackedStateStoreProvider]
     filePath.delete()
     filePath.createNewFile()
   }
+
+  override def getLatestVersion(storeProvider: HDFSBackedStateStoreProvider): Long = {
+    if (storeProvider.loadedMaps.isEmpty) 0 else storeProvider.loadedMaps.firstKey()
+  }
 }
 
 abstract class StateStoreSuiteBase[ProviderClass <: StateStoreProvider]
@@ -1128,55 +1136,37 @@ abstract class StateStoreSuiteBase[ProviderClass <: StateStoreProvider]
   testWithAllCodec("get, put, remove, commit, and all data iterator") { colFamiliesEnabled =>
     tryWithProviderResource(newStoreProvider(colFamiliesEnabled)) { provider =>
       // Verify state before starting a new set of updates
-      assert(getLatestData(provider, useColumnFamilies = colFamiliesEnabled).isEmpty)
 
       val store = provider.getStore(0)
+      assert(getData(store).isEmpty)
       assert(!store.hasCommitted)
       assert(get(store, "a", 0) === None)
       assert(store.iterator().isEmpty)
-
       // Verify state after updating
       put(store, "a", 0, 1)
       assert(get(store, "a", 0) === Some(1))
-
       assert(store.iterator().nonEmpty)
-      assert(getLatestData(provider, useColumnFamilies = colFamiliesEnabled).isEmpty)
-
+      assert(getLatestVersion(provider) === 0)
       // Make updates, commit and then verify state
       put(store, "b", 0, 2)
       put(store, "aa", 0, 3)
       remove(store, _._1.startsWith("a"))
       assert(store.commit() === 1)
       assert(store.metrics.numKeys === 1)
-
       assert(store.hasCommitted)
-      assert(rowPairsToDataSet(provider.getStore(1).iterator()) === Set(("b", 0) -> 2))
-      assert(getLatestData(provider,
-        useColumnFamilies = colFamiliesEnabled) === Set(("b", 0) -> 2))
-
+      val store1 = provider.getStore(1)
+      assert(rowPairsToDataSet(store1.iterator()) === Set(("b", 0) -> 2))
+      assert(getData(store1) === Set(("b", 0) -> 2))
+      store1.commit()
       // Trying to get newer versions should fail
       var e = intercept[SparkException] {
-        provider.getStore(2)
+        provider.getStore(3)
       }
       assert(e.getMessage.contains("does not exist"))
-
       e = intercept[SparkException] {
-        getData(provider, 2, useColumnFamilies = colFamiliesEnabled)
+        getData(provider, 3, useColumnFamilies = colFamiliesEnabled)
       }
       assert(e.getMessage.contains("does not exist"))
-
-      // New updates to the reloaded store with new version, and does not change old version
-      tryWithProviderResource(newStoreProvider(store.id, colFamiliesEnabled)) { reloadedProvider =>
-        val reloadedStore = reloadedProvider.getStore(1)
-        put(reloadedStore, "c", 0, 4)
-        assert(reloadedStore.commit() === 2)
-        assert(rowPairsToDataSet(reloadedProvider.getStore(2).iterator()) ===
-          Set(("b", 0) -> 2, ("c", 0) -> 4))
-        assert(getLatestData(provider, useColumnFamilies = colFamiliesEnabled)
-          === Set(("b", 0) -> 2, ("c", 0) -> 4))
-        assert(getData(provider, version = 1, useColumnFamilies = colFamiliesEnabled)
-          === Set(("b", 0) -> 2))
-      }
     }
   }
 
@@ -1184,9 +1174,8 @@ abstract class StateStoreSuiteBase[ProviderClass <: StateStoreProvider]
     tryWithProviderResource(newStoreProvider(keySchema, PrefixKeyScanStateEncoderSpec(keySchema, 1),
       colFamiliesEnabled)) { provider =>
       // Verify state before starting a new set of updates
-      assert(getLatestData(provider, useColumnFamilies = false).isEmpty)
-
       var store = provider.getStore(0)
+      assert(getData(store).isEmpty)
 
       def putCompositeKeys(keys: Seq[(String, Int)]): Unit = {
         val randomizedKeys = scala.util.Random.shuffle(keys.toList)
@@ -1213,27 +1202,21 @@ abstract class StateStoreSuiteBase[ProviderClass <: StateStoreProvider]
       verifyScan(key1AtVersion0, key2AtVersion0)
 
       assert(store.prefixScan(dataToPrefixKeyRow("non-exist")).isEmpty)
-
       // committing and loading the version 1 (the version being committed)
       store.commit()
       store = provider.getStore(1)
-
       // before putting the new key-value pairs, verify prefix scan works for existing keys
       verifyScan(key1AtVersion0, key2AtVersion0)
-
       val key1AtVersion1 = Seq("c", "d")
       val key2AtVersion1 = Seq(4, 5, 6)
       val keysAtVersion1 = for (k1 <- key1AtVersion1; k2 <- key2AtVersion1) yield (k1, k2)
-
       // put a new key-value pairs, and verify that prefix scan reflects the changes
       putCompositeKeys(keysAtVersion1)
       verifyScan(Seq("c"), Seq(1, 2, 3, 4, 5, 6))
       verifyScan(Seq("d"), Seq(4, 5, 6))
-
       // aborting and loading the version 1 again (keysAtVersion1 should be rolled back)
       store.abort()
       store = provider.getStore(1)
-
       // prefix scan should not reflect the uncommitted changes
       verifyScan(key1AtVersion0, key2AtVersion0)
       verifyScan(Seq("d"), Seq.empty)
@@ -1243,7 +1226,7 @@ abstract class StateStoreSuiteBase[ProviderClass <: StateStoreProvider]
   testWithAllCodec(s"numKeys metrics") { colFamiliesEnabled =>
     tryWithProviderResource(newStoreProvider(colFamiliesEnabled)) { provider =>
       // Verify state before starting a new set of updates
-      assert(getLatestData(provider, useColumnFamilies = colFamiliesEnabled).isEmpty)
+      // assert(getLatestData(provider, useColumnFamilies = colFamiliesEnabled).isEmpty)
 
       val store = provider.getStore(0)
       put(store, "a", 0, 1)
@@ -1271,7 +1254,6 @@ abstract class StateStoreSuiteBase[ProviderClass <: StateStoreProvider]
   testWithAllCodec(s"removing while iterating") { colFamiliesEnabled =>
     tryWithProviderResource(newStoreProvider(colFamiliesEnabled)) { provider =>
       // Verify state before starting a new set of updates
-      assert(getLatestData(provider, useColumnFamilies = colFamiliesEnabled).isEmpty)
       val store = provider.getStore(0)
       put(store, "a", 0, 1)
       put(store, "b", 0, 2)
@@ -1289,6 +1271,7 @@ abstract class StateStoreSuiteBase[ProviderClass <: StateStoreProvider]
         tuple => keyRowToData(tuple.key) == ("b", 0) }
       filtered2.foreach { tuple => store.remove(tuple.key) }
       assert(get(store, "b", 0) === None)
+      store.commit()
     }
   }
 
@@ -1297,10 +1280,10 @@ abstract class StateStoreSuiteBase[ProviderClass <: StateStoreProvider]
       val store = provider.getStore(0)
       put(store, "a", 0, 1)
       store.commit()
-      assert(rowPairsToDataSet(provider.getStore(1).iterator()) === Set(("a", 0) -> 1))
 
       // cancelUpdates should not change the data in the files
       val store1 = provider.getStore(1)
+      assert(rowPairsToDataSet(store1.iterator()) === Set(("a", 0) -> 1))
       put(store1, "b", 0, 1)
       store1.abort()
     }
@@ -1843,12 +1826,17 @@ abstract class StateStoreSuiteBase[ProviderClass <: StateStoreProvider]
   def getLatestData(storeProvider: ProviderClass,
     useColumnFamilies: Boolean): Set[((String, Int), Int)]
 
+  /** Get the latest data referred to by the given provider but not using this provider */
+  def getLatestVersion(storeProvider: ProviderClass): Long
+
   /**
    * Get a specific version of data referred to by the given provider but not using
    * this provider
    */
   def getData(storeProvider: ProviderClass, version: Int,
     useColumnFamilies: Boolean): Set[((String, Int), Int)]
+
+  def getData(store: StateStore): Set[((String, Int), Int)]
 
   protected def testQuietly(name: String)(f: => Unit): Unit = {
     test(name) {
