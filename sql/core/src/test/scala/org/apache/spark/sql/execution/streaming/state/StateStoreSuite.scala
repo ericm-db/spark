@@ -170,6 +170,486 @@ class StateStoreSuite extends StateStoreSuiteBase[HDFSBackedStateStoreProvider]
     require(!StateStore.isMaintenanceRunning)
   }
 
+  testWithAllCodec("get, put, remove, commit, and all data iterator") { colFamiliesEnabled =>
+    tryWithProviderResource(newStoreProvider(colFamiliesEnabled)) { provider =>
+      // Verify state before starting a new set of updates
+      assert(getLatestData(provider, useColumnFamilies = colFamiliesEnabled).isEmpty)
+
+      val store = provider.getStore(0)
+      assert(!store.hasCommitted)
+      assert(get(store, "a", 0) === None)
+      assert(store.iterator().isEmpty)
+
+      // Verify state after updating
+      put(store, "a", 0, 1)
+      assert(get(store, "a", 0) === Some(1))
+
+      assert(store.iterator().nonEmpty)
+      assert(getLatestData(provider, useColumnFamilies = colFamiliesEnabled).isEmpty)
+
+      // Make updates, commit and then verify state
+      put(store, "b", 0, 2)
+      put(store, "aa", 0, 3)
+      remove(store, _._1.startsWith("a"))
+      assert(store.commit() === 1)
+      assert(store.metrics.numKeys === 1)
+
+      assert(store.hasCommitted)
+      assert(rowPairsToDataSet(provider.getStore(1).iterator()) === Set(("b", 0) -> 2))
+      assert(getLatestData(provider,
+        useColumnFamilies = colFamiliesEnabled) === Set(("b", 0) -> 2))
+
+      // Trying to get newer versions should fail
+      var e = intercept[SparkException] {
+        provider.getStore(2)
+      }
+      assert(e.getMessage.contains("does not exist"))
+
+      e = intercept[SparkException] {
+        getData(provider, 2, useColumnFamilies = colFamiliesEnabled)
+      }
+      assert(e.getMessage.contains("does not exist"))
+
+      // New updates to the reloaded store with new version, and does not change old version
+      tryWithProviderResource(newStoreProvider(store.id, colFamiliesEnabled)) { reloadedProvider =>
+        val reloadedStore = reloadedProvider.getStore(1)
+        put(reloadedStore, "c", 0, 4)
+        assert(reloadedStore.commit() === 2)
+        assert(rowPairsToDataSet(reloadedProvider.getStore(2).iterator()) ===
+          Set(("b", 0) -> 2, ("c", 0) -> 4))
+        assert(getLatestData(provider, useColumnFamilies = colFamiliesEnabled)
+          === Set(("b", 0) -> 2, ("c", 0) -> 4))
+        assert(getData(provider, version = 1, useColumnFamilies = colFamiliesEnabled)
+          === Set(("b", 0) -> 2))
+      }
+    }
+  }
+
+  testWithAllCodec("prefix scan") { colFamiliesEnabled =>
+    tryWithProviderResource(newStoreProvider(keySchema, PrefixKeyScanStateEncoderSpec(keySchema, 1),
+      colFamiliesEnabled)) { provider =>
+      // Verify state before starting a new set of updates
+      assert(getLatestData(provider, useColumnFamilies = false).isEmpty)
+
+      var store = provider.getStore(0)
+
+      def putCompositeKeys(keys: Seq[(String, Int)]): Unit = {
+        val randomizedKeys = scala.util.Random.shuffle(keys.toList)
+        randomizedKeys.foreach { case (key1, key2) =>
+          put(store, key1, key2, key2)
+        }
+      }
+
+      def verifyScan(key1: Seq[String], key2: Seq[Int]): Unit = {
+        key1.foreach { k1 =>
+          val keyValueSet = store.prefixScan(dataToPrefixKeyRow(k1)).map { pair =>
+            rowPairToDataPair(pair.withRows(pair.key.copy(), pair.value.copy()))
+          }.toSet
+
+          assert(keyValueSet === key2.map(k2 => ((k1, k2), k2)).toSet)
+        }
+      }
+
+      val key1AtVersion0 = Seq("a", "b", "c")
+      val key2AtVersion0 = Seq(1, 2, 3)
+      val keysAtVersion0 = for (k1 <- key1AtVersion0; k2 <- key2AtVersion0) yield (k1, k2)
+
+      putCompositeKeys(keysAtVersion0)
+      verifyScan(key1AtVersion0, key2AtVersion0)
+
+      assert(store.prefixScan(dataToPrefixKeyRow("non-exist")).isEmpty)
+
+      // committing and loading the version 1 (the version being committed)
+      store.commit()
+      store = provider.getStore(1)
+
+      // before putting the new key-value pairs, verify prefix scan works for existing keys
+      verifyScan(key1AtVersion0, key2AtVersion0)
+
+      val key1AtVersion1 = Seq("c", "d")
+      val key2AtVersion1 = Seq(4, 5, 6)
+      val keysAtVersion1 = for (k1 <- key1AtVersion1; k2 <- key2AtVersion1) yield (k1, k2)
+
+      // put a new key-value pairs, and verify that prefix scan reflects the changes
+      putCompositeKeys(keysAtVersion1)
+      verifyScan(Seq("c"), Seq(1, 2, 3, 4, 5, 6))
+      verifyScan(Seq("d"), Seq(4, 5, 6))
+
+      // aborting and loading the version 1 again (keysAtVersion1 should be rolled back)
+      store.abort()
+      store = provider.getStore(1)
+
+      // prefix scan should not reflect the uncommitted changes
+      verifyScan(key1AtVersion0, key2AtVersion0)
+      verifyScan(Seq("d"), Seq.empty)
+    }
+  }
+
+  testWithAllCodec(s"numKeys metrics") { colFamiliesEnabled =>
+    tryWithProviderResource(newStoreProvider(colFamiliesEnabled)) { provider =>
+      // Verify state before starting a new set of updates
+      assert(getLatestData(provider, useColumnFamilies = colFamiliesEnabled).isEmpty)
+
+      val store = provider.getStore(0)
+      put(store, "a", 0, 1)
+      put(store, "b", 0, 2)
+      put(store, "c", 0, 3)
+      put(store, "d", 0, 4)
+      put(store, "e", 0, 5)
+      assert(store.commit() === 1)
+      assert(store.metrics.numKeys === 5)
+
+      val reloadedProvider = newStoreProvider(store.id, colFamiliesEnabled)
+      val reloadedStore = reloadedProvider.getStore(1)
+
+      assert(rowPairsToDataSet(reloadedStore.iterator()) ===
+        Set(("a", 0) -> 1, ("b", 0) -> 2, ("c", 0) -> 3, ("d", 0) -> 4, ("e", 0) -> 5))
+
+      remove(reloadedStore, _._1 == "b")
+      assert(reloadedStore.commit() === 2)
+      assert(reloadedStore.metrics.numKeys === 4)
+      assert(rowPairsToDataSet(reloadedProvider.getStore(2).iterator()) ===
+        Set(("a", 0) -> 1, ("c", 0) -> 3, ("d", 0) -> 4, ("e", 0) -> 5))
+    }
+  }
+
+  testWithAllCodec(s"removing while iterating") { colFamiliesEnabled =>
+    tryWithProviderResource(newStoreProvider(colFamiliesEnabled)) { provider =>
+      // Verify state before starting a new set of updates
+      assert(getLatestData(provider, useColumnFamilies = colFamiliesEnabled).isEmpty)
+      val store = provider.getStore(0)
+      put(store, "a", 0, 1)
+      put(store, "b", 0, 2)
+
+      // Updates should work while iterating of filtered entries
+      val filtered = store.iterator().filter {
+        tuple => keyRowToData(tuple.key) == ("a", 0) }
+      filtered.foreach { tuple =>
+        store.put(tuple.key, dataToValueRow(valueRowToData(tuple.value) + 1))
+      }
+      assert(get(store, "a", 0) === Some(2))
+
+      // Removes should work while iterating of filtered entries
+      val filtered2 = store.iterator().filter {
+        tuple => keyRowToData(tuple.key) == ("b", 0) }
+      filtered2.foreach { tuple => store.remove(tuple.key) }
+      assert(get(store, "b", 0) === None)
+    }
+  }
+
+  testWithAllCodec(s"abort") { colFamiliesEnabled =>
+    tryWithProviderResource(newStoreProvider(colFamiliesEnabled)) { provider =>
+      val store = provider.getStore(0)
+      put(store, "a", 0, 1)
+      store.commit()
+      assert(rowPairsToDataSet(provider.getStore(1).iterator()) === Set(("a", 0) -> 1))
+
+      // cancelUpdates should not change the data in the files
+      val store1 = provider.getStore(1)
+      put(store1, "b", 0, 1)
+      store1.abort()
+    }
+  }
+
+  testWithAllCodec(s"getStore with invalid versions") { colFamiliesEnabled =>
+    tryWithProviderResource(newStoreProvider(colFamiliesEnabled)) { provider =>
+      def checkInvalidVersion(version: Int, isHDFSBackedStoreProvider: Boolean): Unit = {
+        val e = intercept[SparkException] {
+          provider.getStore(version)
+        }
+        if (version < 0) {
+          checkError(
+            e,
+            condition = "CANNOT_LOAD_STATE_STORE.UNEXPECTED_VERSION",
+            parameters = Map("version" -> version.toString)
+          )
+        } else {
+          if (isHDFSBackedStoreProvider) {
+            checkError(
+              e,
+              condition = "CANNOT_LOAD_STATE_STORE.CANNOT_READ_DELTA_FILE_NOT_EXISTS",
+              parameters = Map("fileToRead" -> ".*", "clazz" -> ".*"),
+              matchPVals = true
+            )
+          } else {
+            checkError(
+              e,
+              condition = "CANNOT_LOAD_STATE_STORE.CANNOT_READ_STREAMING_STATE_FILE",
+              parameters = Map("fileToRead" -> ".*"),
+              matchPVals = true
+            )
+          }
+        }
+      }
+
+      checkInvalidVersion(-1, provider.isInstanceOf[HDFSBackedStateStoreProvider])
+      checkInvalidVersion(1, provider.isInstanceOf[HDFSBackedStateStoreProvider])
+
+      val store = provider.getStore(0)
+      put(store, "a", 0, 1)
+      assert(store.commit() === 1)
+
+      val store1_ = provider.getStore(1)
+      assert(rowPairsToDataSet(store1_.iterator()) === Set(("a", 0) -> 1))
+
+      checkInvalidVersion(-1, provider.isInstanceOf[HDFSBackedStateStoreProvider])
+      checkInvalidVersion(2, provider.isInstanceOf[HDFSBackedStateStoreProvider])
+
+      // Update store version with some data
+      val store1 = provider.getStore(1)
+      assert(rowPairsToDataSet(store1.iterator()) === Set(("a", 0) -> 1))
+      put(store1, "b", 0, 1)
+      assert(store1.commit() === 2)
+      val store2 = provider.getStore(2)
+      assert(rowPairsToDataSet(store2.iterator()) === Set(("a", 0) -> 1, ("b", 0) -> 1))
+
+      checkInvalidVersion(-1, provider.isInstanceOf[HDFSBackedStateStoreProvider])
+      checkInvalidVersion(3, provider.isInstanceOf[HDFSBackedStateStoreProvider])
+    }
+  }
+
+  testWithAllCodec("two concurrent StateStores - one for read-only and one for read-write") {
+    colFamiliesEnabled =>
+      // During Streaming Aggregation, we have two StateStores per task, one used as read-only in
+      // `StateStoreRestoreExec`, and one read-write used in `StateStoreSaveExec`.
+      // `StateStore.abort`
+      // will be called for these StateStores if they haven't committed their results. We need to
+      // make sure that `abort` in read-only store after a `commit` in the read-write store doesn't
+      // accidentally lead to the deletion of state.
+      val dir = newDir()
+      val storeId = StateStoreId(dir, 0L, 1)
+      val key1 = "a"
+      val key2 = 0
+
+      tryWithProviderResource(newStoreProvider(storeId, colFamiliesEnabled)) { provider0 =>
+        // prime state
+        val store = provider0.getStore(0)
+
+        put(store, key1, key2, 1)
+        store.commit()
+        assert(rowPairsToDataSet(provider0.getStore(1).iterator()) === Set((key1, key2) -> 1))
+      }
+
+      // two state stores
+      tryWithProviderResource(newStoreProvider(storeId, colFamiliesEnabled)) { provider1 =>
+        val restoreStore = provider1.getReadStore(1)
+        val saveStore = provider1.getStore(1)
+
+        put(saveStore, key1, key2, get(restoreStore, key1, key2).get + 1)
+        saveStore.commit()
+        restoreStore.abort()
+      }
+
+      // check that state is correct for next batch
+      tryWithProviderResource(newStoreProvider(storeId, colFamiliesEnabled)) { provider2 =>
+        val finalStore = provider2.getStore(2)
+        assert(rowPairsToDataSet(finalStore.iterator()) === Set((key1, key2) -> 2))
+      }
+  }
+
+  testQuietly("SPARK-18342: commit fails when rename fails") {
+    import RenameReturnsFalseFileSystem._
+
+    val ROCKSDB_STATE_STORE = "RocksDBStateStore"
+    val dir = scheme + "://" + newDir()
+    val conf = new Configuration()
+    conf.set(s"fs.$scheme.impl", classOf[RenameReturnsFalseFileSystem].getName)
+
+    val storeId = StateStoreId(dir, operatorId = 0, partitionId = 0)
+    tryWithProviderResource(newStoreProvider(storeId, conf)) { provider =>
+      val store = provider.getStore(0)
+      put(store, "a", 0, 0)
+      val e = intercept[SparkException](quietly { store.commit() } )
+
+      assert(e.getCondition == "CANNOT_WRITE_STATE_STORE.CANNOT_COMMIT")
+      if (store.getClass.getName contains ROCKSDB_STATE_STORE) {
+        assert(e.getMessage contains "RocksDBStateStore[id=(op=0,part=0)")
+      } else {
+        assert(e.getMessage contains "HDFSStateStore[id=(op=0,part=0)")
+      }
+      assert(e.getMessage contains "Error writing state store files")
+      assert(e.getCause.getMessage.contains("Failed to rename"))
+    }
+  }
+
+  // This test illustrates state store iterator behavior differences leading to SPARK-38320.
+  testWithAllCodec("SPARK-38320 - state store iterator behavior differences") {
+    colFamiliesEnabled =>
+      val ROCKSDB_STATE_STORE = "RocksDBStateStore"
+      val dir = newDir()
+      val storeId = StateStoreId(dir, 0L, 1)
+      var version = 0L
+
+      tryWithProviderResource(newStoreProvider(storeId, colFamiliesEnabled)) { provider =>
+        val store = provider.getStore(version)
+        logInfo(s"Running SPARK-38320 test with state store ${store.getClass.getName}")
+
+        val itr1 = store.iterator()  // itr1 is created before any writes to the store.
+        put(store, "1", 11, 100)
+        put(store, "2", 22, 200)
+        val itr2 = store.iterator()  // itr2 is created in the middle of the writes.
+        put(store, "1", 11, 101)  // Overwrite row (1, 11)
+        put(store, "3", 33, 300)
+        val itr3 = store.iterator()  // itr3 is created after all writes.
+
+        val intermediateState = Set(("1", 11) -> 100, ("2", 22) -> 200) // The intermediate state.
+        val finalState = Set(("1", 11) -> 101,
+          ("2", 22) -> 200, ("3", 33) -> 300) // The final state.
+        // Itr1 does not see any updates - original state of the store (SPARK-38320)
+        assert(rowPairsToDataSet(itr1) === Set.empty[Set[((String, Int), Int)]])
+        if (store.getClass.getName contains ROCKSDB_STATE_STORE) {
+          assert(rowPairsToDataSet(itr2) === intermediateState)
+        } else {
+          assert(rowPairsToDataSet(itr2) === finalState)
+        }
+        assert(rowPairsToDataSet(itr3) === finalState)
+
+        version = store.commit()
+      }
+
+      // Reload the store from the commited version and repeat the above test.
+      tryWithProviderResource(newStoreProvider(storeId, colFamiliesEnabled)) { provider =>
+        assert(version > 0)
+        val store = provider.getStore(version)
+
+        val itr1 = store.iterator()  // itr1 is created before any writes to the store.
+        put(store, "3", 33, 301)  // Overwrite row (3, 33)
+        put(store, "4", 44, 400)
+        val itr2 = store.iterator()  // itr2 is created in the middle of the writes.
+        put(store, "4", 44, 401)  // Overwrite row (4, 44)
+        put(store, "5", 55, 500)
+        val itr3 = store.iterator()  // itr3 is created after all writes.
+
+        // The intermediate state
+        val intermediate = Set(
+          ("1", 11) -> 101, ("2", 22) -> 200, ("3", 33) -> 301, ("4", 44) -> 400)
+        // The final state.
+        val expected = Set(
+          ("1", 11) -> 101, ("2", 22) -> 200, ("3", 33) -> 301, ("4", 44) -> 401, ("5", 55) -> 500)
+        if (store.getClass.getName contains ROCKSDB_STATE_STORE) {
+          // RocksDB itr1 does not see any updates - original state of the store (SPARK-38320)
+          assert(rowPairsToDataSet(itr1) === Set(
+            ("1", 11) -> 101, ("2", 22) -> 200, ("3", 33) -> 300))
+        } else {
+          assert(rowPairsToDataSet(itr1) === expected)
+        }
+
+        if (store.getClass.getName contains ROCKSDB_STATE_STORE) {
+          assert(rowPairsToDataSet(itr2) === intermediate)
+        } else {
+          assert(rowPairsToDataSet(itr2) === expected)
+        }
+
+        assert(rowPairsToDataSet(itr3) === expected)
+
+        version = store.commit()
+      }
+  }
+
+  test("StateStore.get") {
+    val conf = new SparkConf()
+      .setMaster("local")
+      .setAppName("test")
+    quietly {
+      withSpark(SparkContext.getOrCreate(conf)) { sc =>
+        withCoordinatorRef(sc) { coordinatorRef =>
+          val dir = newDir()
+          val storeId = StateStoreProviderId(StateStoreId(dir, 0, 0), UUID.randomUUID)
+          val storeConf = getDefaultStoreConf()
+          val hadoopConf = new Configuration()
+
+          // Verify that trying to get incorrect versions throw errors
+          var e = intercept[SparkException] {
+            StateStore.get(
+              storeId, keySchema, valueSchema,
+              NoPrefixKeyStateEncoderSpec(keySchema), -1, None, None, useColumnFamilies = false,
+              storeConf, hadoopConf)
+          }
+          checkError(
+            e,
+            condition = "CANNOT_LOAD_STATE_STORE.UNEXPECTED_VERSION",
+            parameters = Map(
+              "version" -> "-1"
+            )
+          )
+
+          e = intercept[SparkException] {
+            StateStore.get(
+              storeId, keySchema, valueSchema,
+              NoPrefixKeyStateEncoderSpec(keySchema),
+              1, None, None, useColumnFamilies = false,
+              storeConf, hadoopConf)
+          }
+          checkError(
+            e,
+            condition = "CANNOT_LOAD_STATE_STORE.CANNOT_READ_DELTA_FILE_NOT_EXISTS",
+            parameters = Map(
+              "fileToRead" -> s"$dir/0/0/1.delta",
+              "clazz" -> "HDFSStateStoreProvider\\[.+\\]"
+            ),
+            matchPVals = true
+          )
+
+          // Increase version of the store and try to get again
+          val store0 = StateStore.get(
+            storeId, keySchema, valueSchema,
+            NoPrefixKeyStateEncoderSpec(keySchema),
+            0, None, None, useColumnFamilies = false,
+            storeConf, hadoopConf)
+          assert(store0.version === 0)
+          put(store0, "a", 0, 1)
+          store0.commit()
+
+          val store1 = StateStore.get(
+            storeId, keySchema, valueSchema,
+            NoPrefixKeyStateEncoderSpec(keySchema),
+            1, None, None, useColumnFamilies = false,
+            storeConf, hadoopConf)
+          assert(StateStore.isLoaded(storeId))
+          assert(store1.version === 1)
+          assert(rowPairsToDataSet(store1.iterator()) === Set(("a", 0) -> 1))
+
+          // Verify that you can also load older version
+          val store0reloaded = StateStore.get(
+            storeId, keySchema, valueSchema,
+            NoPrefixKeyStateEncoderSpec(keySchema),
+            0, None, None, useColumnFamilies = false,
+            storeConf, hadoopConf)
+          assert(store0reloaded.version === 0)
+          assert(rowPairsToDataSet(store0reloaded.iterator()) === Set.empty)
+
+          // Verify that you can remove the store and still reload and use it
+          StateStore.unload(storeId)
+          assert(!StateStore.isLoaded(storeId))
+
+          val store1reloaded = StateStore.get(
+            storeId, keySchema, valueSchema,
+            NoPrefixKeyStateEncoderSpec(keySchema),
+            1, None, None, useColumnFamilies = false,
+            storeConf, hadoopConf)
+          assert(StateStore.isLoaded(storeId))
+          assert(store1reloaded.version === 1)
+          put(store1reloaded, "a", 0, 2)
+          assert(store1reloaded.commit() === 2)
+          assert(rowPairsToDataSet(store1reloaded.iterator()) === Set(("a", 0) -> 2))
+        }
+      }
+    }
+  }
+
+  test("SPARK-35659: StateStore.put cannot put null value") {
+    tryWithProviderResource(newStoreProvider()) { provider =>
+      // Verify state before starting a new set of updates
+      assert(getLatestData(provider, useColumnFamilies = false).isEmpty)
+
+      val store = provider.getStore(0)
+      val err = intercept[IllegalArgumentException] {
+        store.put(dataToKeyRow("key", 0), null)
+      }
+      assert(err.getMessage.contains("Cannot put a null value"))
+    }
+  }
+
   test("retaining only two latest versions when MAX_BATCHES_TO_RETAIN_IN_MEMORY set to 2") {
     tryWithProviderResource(
       newStoreProvider(minDeltasForSnapshot = 10, numOfVersToRetainInMemory = 2)) { provider =>
@@ -1125,471 +1605,6 @@ abstract class StateStoreSuiteBase[ProviderClass <: StateStoreProvider]
   protected val keySchema: StructType = StateStoreTestsHelper.keySchema
   protected val valueSchema: StructType = StateStoreTestsHelper.valueSchema
 
-  testWithAllCodec("get, put, remove, commit, and all data iterator") { colFamiliesEnabled =>
-    tryWithProviderResource(newStoreProvider(colFamiliesEnabled)) { provider =>
-      // Verify state before starting a new set of updates
-      assert(getLatestData(provider, useColumnFamilies = colFamiliesEnabled).isEmpty)
-
-      val store = provider.getStore(0)
-      assert(!store.hasCommitted)
-      assert(get(store, "a", 0) === None)
-      assert(store.iterator().isEmpty)
-
-      // Verify state after updating
-      put(store, "a", 0, 1)
-      assert(get(store, "a", 0) === Some(1))
-
-      assert(store.iterator().nonEmpty)
-      assert(getLatestData(provider, useColumnFamilies = colFamiliesEnabled).isEmpty)
-
-      // Make updates, commit and then verify state
-      put(store, "b", 0, 2)
-      put(store, "aa", 0, 3)
-      remove(store, _._1.startsWith("a"))
-      assert(store.commit() === 1)
-      assert(store.metrics.numKeys === 1)
-
-      assert(store.hasCommitted)
-      assert(rowPairsToDataSet(provider.getStore(1).iterator()) === Set(("b", 0) -> 2))
-      assert(getLatestData(provider,
-        useColumnFamilies = colFamiliesEnabled) === Set(("b", 0) -> 2))
-
-      // Trying to get newer versions should fail
-      var e = intercept[SparkException] {
-        provider.getStore(2)
-      }
-      assert(e.getMessage.contains("does not exist"))
-
-      e = intercept[SparkException] {
-        getData(provider, 2, useColumnFamilies = colFamiliesEnabled)
-      }
-      assert(e.getMessage.contains("does not exist"))
-
-      // New updates to the reloaded store with new version, and does not change old version
-      tryWithProviderResource(newStoreProvider(store.id, colFamiliesEnabled)) { reloadedProvider =>
-        val reloadedStore = reloadedProvider.getStore(1)
-        put(reloadedStore, "c", 0, 4)
-        assert(reloadedStore.commit() === 2)
-        assert(rowPairsToDataSet(reloadedProvider.getStore(2).iterator()) ===
-          Set(("b", 0) -> 2, ("c", 0) -> 4))
-        assert(getLatestData(provider, useColumnFamilies = colFamiliesEnabled)
-          === Set(("b", 0) -> 2, ("c", 0) -> 4))
-        assert(getData(provider, version = 1, useColumnFamilies = colFamiliesEnabled)
-          === Set(("b", 0) -> 2))
-      }
-    }
-  }
-
-  testWithAllCodec("prefix scan") { colFamiliesEnabled =>
-    tryWithProviderResource(newStoreProvider(keySchema, PrefixKeyScanStateEncoderSpec(keySchema, 1),
-      colFamiliesEnabled)) { provider =>
-      // Verify state before starting a new set of updates
-      assert(getLatestData(provider, useColumnFamilies = false).isEmpty)
-
-      var store = provider.getStore(0)
-
-      def putCompositeKeys(keys: Seq[(String, Int)]): Unit = {
-        val randomizedKeys = scala.util.Random.shuffle(keys.toList)
-        randomizedKeys.foreach { case (key1, key2) =>
-          put(store, key1, key2, key2)
-        }
-      }
-
-      def verifyScan(key1: Seq[String], key2: Seq[Int]): Unit = {
-        key1.foreach { k1 =>
-          val keyValueSet = store.prefixScan(dataToPrefixKeyRow(k1)).map { pair =>
-            rowPairToDataPair(pair.withRows(pair.key.copy(), pair.value.copy()))
-          }.toSet
-
-          assert(keyValueSet === key2.map(k2 => ((k1, k2), k2)).toSet)
-        }
-      }
-
-      val key1AtVersion0 = Seq("a", "b", "c")
-      val key2AtVersion0 = Seq(1, 2, 3)
-      val keysAtVersion0 = for (k1 <- key1AtVersion0; k2 <- key2AtVersion0) yield (k1, k2)
-
-      putCompositeKeys(keysAtVersion0)
-      verifyScan(key1AtVersion0, key2AtVersion0)
-
-      assert(store.prefixScan(dataToPrefixKeyRow("non-exist")).isEmpty)
-
-      // committing and loading the version 1 (the version being committed)
-      store.commit()
-      store = provider.getStore(1)
-
-      // before putting the new key-value pairs, verify prefix scan works for existing keys
-      verifyScan(key1AtVersion0, key2AtVersion0)
-
-      val key1AtVersion1 = Seq("c", "d")
-      val key2AtVersion1 = Seq(4, 5, 6)
-      val keysAtVersion1 = for (k1 <- key1AtVersion1; k2 <- key2AtVersion1) yield (k1, k2)
-
-      // put a new key-value pairs, and verify that prefix scan reflects the changes
-      putCompositeKeys(keysAtVersion1)
-      verifyScan(Seq("c"), Seq(1, 2, 3, 4, 5, 6))
-      verifyScan(Seq("d"), Seq(4, 5, 6))
-
-      // aborting and loading the version 1 again (keysAtVersion1 should be rolled back)
-      store.abort()
-      store = provider.getStore(1)
-
-      // prefix scan should not reflect the uncommitted changes
-      verifyScan(key1AtVersion0, key2AtVersion0)
-      verifyScan(Seq("d"), Seq.empty)
-    }
-  }
-
-  testWithAllCodec(s"numKeys metrics") { colFamiliesEnabled =>
-    tryWithProviderResource(newStoreProvider(colFamiliesEnabled)) { provider =>
-      // Verify state before starting a new set of updates
-      assert(getLatestData(provider, useColumnFamilies = colFamiliesEnabled).isEmpty)
-
-      val store = provider.getStore(0)
-      put(store, "a", 0, 1)
-      put(store, "b", 0, 2)
-      put(store, "c", 0, 3)
-      put(store, "d", 0, 4)
-      put(store, "e", 0, 5)
-      assert(store.commit() === 1)
-      assert(store.metrics.numKeys === 5)
-
-      val reloadedProvider = newStoreProvider(store.id, colFamiliesEnabled)
-      val reloadedStore = reloadedProvider.getStore(1)
-
-      assert(rowPairsToDataSet(reloadedStore.iterator()) ===
-        Set(("a", 0) -> 1, ("b", 0) -> 2, ("c", 0) -> 3, ("d", 0) -> 4, ("e", 0) -> 5))
-
-      remove(reloadedStore, _._1 == "b")
-      assert(reloadedStore.commit() === 2)
-      assert(reloadedStore.metrics.numKeys === 4)
-      assert(rowPairsToDataSet(reloadedProvider.getStore(2).iterator()) ===
-        Set(("a", 0) -> 1, ("c", 0) -> 3, ("d", 0) -> 4, ("e", 0) -> 5))
-    }
-  }
-
-  testWithAllCodec(s"removing while iterating") { colFamiliesEnabled =>
-    tryWithProviderResource(newStoreProvider(colFamiliesEnabled)) { provider =>
-      // Verify state before starting a new set of updates
-      assert(getLatestData(provider, useColumnFamilies = colFamiliesEnabled).isEmpty)
-      val store = provider.getStore(0)
-      put(store, "a", 0, 1)
-      put(store, "b", 0, 2)
-
-      // Updates should work while iterating of filtered entries
-      val filtered = store.iterator().filter {
-        tuple => keyRowToData(tuple.key) == ("a", 0) }
-      filtered.foreach { tuple =>
-        store.put(tuple.key, dataToValueRow(valueRowToData(tuple.value) + 1))
-      }
-      assert(get(store, "a", 0) === Some(2))
-
-      // Removes should work while iterating of filtered entries
-      val filtered2 = store.iterator().filter {
-        tuple => keyRowToData(tuple.key) == ("b", 0) }
-      filtered2.foreach { tuple => store.remove(tuple.key) }
-      assert(get(store, "b", 0) === None)
-    }
-  }
-
-  testWithAllCodec(s"abort") { colFamiliesEnabled =>
-    tryWithProviderResource(newStoreProvider(colFamiliesEnabled)) { provider =>
-      val store = provider.getStore(0)
-      put(store, "a", 0, 1)
-      store.commit()
-      assert(rowPairsToDataSet(provider.getStore(1).iterator()) === Set(("a", 0) -> 1))
-
-      // cancelUpdates should not change the data in the files
-      val store1 = provider.getStore(1)
-      put(store1, "b", 0, 1)
-      store1.abort()
-    }
-  }
-
-  testWithAllCodec(s"getStore with invalid versions") { colFamiliesEnabled =>
-    tryWithProviderResource(newStoreProvider(colFamiliesEnabled)) { provider =>
-      def checkInvalidVersion(version: Int, isHDFSBackedStoreProvider: Boolean): Unit = {
-        val e = intercept[SparkException] {
-          provider.getStore(version)
-        }
-        if (version < 0) {
-          checkError(
-            e,
-            condition = "CANNOT_LOAD_STATE_STORE.UNEXPECTED_VERSION",
-            parameters = Map("version" -> version.toString)
-          )
-        } else {
-          if (isHDFSBackedStoreProvider) {
-            checkError(
-              e,
-              condition = "CANNOT_LOAD_STATE_STORE.CANNOT_READ_DELTA_FILE_NOT_EXISTS",
-              parameters = Map("fileToRead" -> ".*", "clazz" -> ".*"),
-              matchPVals = true
-            )
-          } else {
-            checkError(
-              e,
-              condition = "CANNOT_LOAD_STATE_STORE.CANNOT_READ_STREAMING_STATE_FILE",
-              parameters = Map("fileToRead" -> ".*"),
-              matchPVals = true
-            )
-          }
-        }
-      }
-
-      checkInvalidVersion(-1, provider.isInstanceOf[HDFSBackedStateStoreProvider])
-      checkInvalidVersion(1, provider.isInstanceOf[HDFSBackedStateStoreProvider])
-
-      val store = provider.getStore(0)
-      put(store, "a", 0, 1)
-      assert(store.commit() === 1)
-
-      val store1_ = provider.getStore(1)
-      assert(rowPairsToDataSet(store1_.iterator()) === Set(("a", 0) -> 1))
-
-      checkInvalidVersion(-1, provider.isInstanceOf[HDFSBackedStateStoreProvider])
-      checkInvalidVersion(2, provider.isInstanceOf[HDFSBackedStateStoreProvider])
-
-      // Update store version with some data
-      val store1 = provider.getStore(1)
-      assert(rowPairsToDataSet(store1.iterator()) === Set(("a", 0) -> 1))
-      put(store1, "b", 0, 1)
-      assert(store1.commit() === 2)
-      val store2 = provider.getStore(2)
-      assert(rowPairsToDataSet(store2.iterator()) === Set(("a", 0) -> 1, ("b", 0) -> 1))
-
-      checkInvalidVersion(-1, provider.isInstanceOf[HDFSBackedStateStoreProvider])
-      checkInvalidVersion(3, provider.isInstanceOf[HDFSBackedStateStoreProvider])
-    }
-  }
-
-  testWithAllCodec("two concurrent StateStores - one for read-only and one for read-write") {
-    colFamiliesEnabled =>
-    // During Streaming Aggregation, we have two StateStores per task, one used as read-only in
-    // `StateStoreRestoreExec`, and one read-write used in `StateStoreSaveExec`. `StateStore.abort`
-    // will be called for these StateStores if they haven't committed their results. We need to
-    // make sure that `abort` in read-only store after a `commit` in the read-write store doesn't
-    // accidentally lead to the deletion of state.
-    val dir = newDir()
-    val storeId = StateStoreId(dir, 0L, 1)
-    val key1 = "a"
-    val key2 = 0
-
-    tryWithProviderResource(newStoreProvider(storeId, colFamiliesEnabled)) { provider0 =>
-      // prime state
-      val store = provider0.getStore(0)
-
-      put(store, key1, key2, 1)
-      store.commit()
-      assert(rowPairsToDataSet(provider0.getStore(1).iterator()) === Set((key1, key2) -> 1))
-    }
-
-    // two state stores
-    tryWithProviderResource(newStoreProvider(storeId, colFamiliesEnabled)) { provider1 =>
-      val restoreStore = provider1.getReadStore(1)
-      val saveStore = provider1.getStore(1)
-
-      put(saveStore, key1, key2, get(restoreStore, key1, key2).get + 1)
-      saveStore.commit()
-      restoreStore.abort()
-    }
-
-    // check that state is correct for next batch
-    tryWithProviderResource(newStoreProvider(storeId, colFamiliesEnabled)) { provider2 =>
-      val finalStore = provider2.getStore(2)
-      assert(rowPairsToDataSet(finalStore.iterator()) === Set((key1, key2) -> 2))
-    }
-  }
-
-  testQuietly("SPARK-18342: commit fails when rename fails") {
-    import RenameReturnsFalseFileSystem._
-
-    val ROCKSDB_STATE_STORE = "RocksDBStateStore"
-    val dir = scheme + "://" + newDir()
-    val conf = new Configuration()
-    conf.set(s"fs.$scheme.impl", classOf[RenameReturnsFalseFileSystem].getName)
-
-    val storeId = StateStoreId(dir, operatorId = 0, partitionId = 0)
-    tryWithProviderResource(newStoreProvider(storeId, conf)) { provider =>
-      val store = provider.getStore(0)
-      put(store, "a", 0, 0)
-      val e = intercept[SparkException](quietly { store.commit() } )
-
-      assert(e.getCondition == "CANNOT_WRITE_STATE_STORE.CANNOT_COMMIT")
-      if (store.getClass.getName contains ROCKSDB_STATE_STORE) {
-        assert(e.getMessage contains "RocksDBStateStore[id=(op=0,part=0)")
-      } else {
-        assert(e.getMessage contains "HDFSStateStore[id=(op=0,part=0)")
-      }
-      assert(e.getMessage contains "Error writing state store files")
-      assert(e.getCause.getMessage.contains("Failed to rename"))
-    }
-  }
-
-  // This test illustrates state store iterator behavior differences leading to SPARK-38320.
-  testWithAllCodec("SPARK-38320 - state store iterator behavior differences") {
-    colFamiliesEnabled =>
-    val ROCKSDB_STATE_STORE = "RocksDBStateStore"
-    val dir = newDir()
-    val storeId = StateStoreId(dir, 0L, 1)
-    var version = 0L
-
-    tryWithProviderResource(newStoreProvider(storeId, colFamiliesEnabled)) { provider =>
-      val store = provider.getStore(version)
-      logInfo(s"Running SPARK-38320 test with state store ${store.getClass.getName}")
-
-      val itr1 = store.iterator()  // itr1 is created before any writes to the store.
-      put(store, "1", 11, 100)
-      put(store, "2", 22, 200)
-      val itr2 = store.iterator()  // itr2 is created in the middle of the writes.
-      put(store, "1", 11, 101)  // Overwrite row (1, 11)
-      put(store, "3", 33, 300)
-      val itr3 = store.iterator()  // itr3 is created after all writes.
-
-      val intermediateState = Set(("1", 11) -> 100, ("2", 22) -> 200) // The intermediate state.
-      val finalState = Set(("1", 11) -> 101, ("2", 22) -> 200, ("3", 33) -> 300) // The final state.
-      // Itr1 does not see any updates - original state of the store (SPARK-38320)
-      assert(rowPairsToDataSet(itr1) === Set.empty[Set[((String, Int), Int)]])
-      if (store.getClass.getName contains ROCKSDB_STATE_STORE) {
-        assert(rowPairsToDataSet(itr2) === intermediateState)
-      } else {
-        assert(rowPairsToDataSet(itr2) === finalState)
-      }
-      assert(rowPairsToDataSet(itr3) === finalState)
-
-      version = store.commit()
-    }
-
-    // Reload the store from the commited version and repeat the above test.
-    tryWithProviderResource(newStoreProvider(storeId, colFamiliesEnabled)) { provider =>
-      assert(version > 0)
-      val store = provider.getStore(version)
-
-      val itr1 = store.iterator()  // itr1 is created before any writes to the store.
-      put(store, "3", 33, 301)  // Overwrite row (3, 33)
-      put(store, "4", 44, 400)
-      val itr2 = store.iterator()  // itr2 is created in the middle of the writes.
-      put(store, "4", 44, 401)  // Overwrite row (4, 44)
-      put(store, "5", 55, 500)
-      val itr3 = store.iterator()  // itr3 is created after all writes.
-
-      // The intermediate state
-      val intermediate = Set(
-        ("1", 11) -> 101, ("2", 22) -> 200, ("3", 33) -> 301, ("4", 44) -> 400)
-      // The final state.
-      val expected = Set(
-        ("1", 11) -> 101, ("2", 22) -> 200, ("3", 33) -> 301, ("4", 44) -> 401, ("5", 55) -> 500)
-      if (store.getClass.getName contains ROCKSDB_STATE_STORE) {
-        // RocksDB itr1 does not see any updates - original state of the store (SPARK-38320)
-        assert(rowPairsToDataSet(itr1) === Set(
-          ("1", 11) -> 101, ("2", 22) -> 200, ("3", 33) -> 300))
-      } else {
-        assert(rowPairsToDataSet(itr1) === expected)
-      }
-
-      if (store.getClass.getName contains ROCKSDB_STATE_STORE) {
-        assert(rowPairsToDataSet(itr2) === intermediate)
-      } else {
-        assert(rowPairsToDataSet(itr2) === expected)
-      }
-
-      assert(rowPairsToDataSet(itr3) === expected)
-
-      version = store.commit()
-    }
-  }
-
-  test("StateStore.get") {
-    val conf = new SparkConf()
-      .setMaster("local")
-      .setAppName("test")
-    quietly {
-      withSpark(SparkContext.getOrCreate(conf)) { sc =>
-        withCoordinatorRef(sc) { coordinatorRef =>
-          val dir = newDir()
-          val storeId = StateStoreProviderId(StateStoreId(dir, 0, 0), UUID.randomUUID)
-          val storeConf = getDefaultStoreConf()
-          val hadoopConf = new Configuration()
-
-          // Verify that trying to get incorrect versions throw errors
-          var e = intercept[SparkException] {
-            StateStore.get(
-              storeId, keySchema, valueSchema,
-                NoPrefixKeyStateEncoderSpec(keySchema), -1, None, None, useColumnFamilies = false,
-                storeConf, hadoopConf)
-          }
-          checkError(
-            e,
-            condition = "CANNOT_LOAD_STATE_STORE.UNEXPECTED_VERSION",
-            parameters = Map(
-              "version" -> "-1"
-            )
-          )
-
-          e = intercept[SparkException] {
-            StateStore.get(
-              storeId, keySchema, valueSchema,
-              NoPrefixKeyStateEncoderSpec(keySchema),
-              1, None, None, useColumnFamilies = false,
-              storeConf, hadoopConf)
-          }
-          checkError(
-            e,
-            condition = "CANNOT_LOAD_STATE_STORE.CANNOT_READ_DELTA_FILE_NOT_EXISTS",
-            parameters = Map(
-              "fileToRead" -> s"$dir/0/0/1.delta",
-              "clazz" -> "HDFSStateStoreProvider\\[.+\\]"
-            ),
-            matchPVals = true
-          )
-
-          // Increase version of the store and try to get again
-          val store0 = StateStore.get(
-            storeId, keySchema, valueSchema,
-            NoPrefixKeyStateEncoderSpec(keySchema),
-            0, None, None, useColumnFamilies = false,
-            storeConf, hadoopConf)
-          assert(store0.version === 0)
-          put(store0, "a", 0, 1)
-          store0.commit()
-
-          val store1 = StateStore.get(
-            storeId, keySchema, valueSchema,
-            NoPrefixKeyStateEncoderSpec(keySchema),
-            1, None, None, useColumnFamilies = false,
-            storeConf, hadoopConf)
-          assert(StateStore.isLoaded(storeId))
-          assert(store1.version === 1)
-          assert(rowPairsToDataSet(store1.iterator()) === Set(("a", 0) -> 1))
-
-          // Verify that you can also load older version
-          val store0reloaded = StateStore.get(
-            storeId, keySchema, valueSchema,
-            NoPrefixKeyStateEncoderSpec(keySchema),
-            0, None, None, useColumnFamilies = false,
-            storeConf, hadoopConf)
-          assert(store0reloaded.version === 0)
-          assert(rowPairsToDataSet(store0reloaded.iterator()) === Set.empty)
-
-          // Verify that you can remove the store and still reload and use it
-          StateStore.unload(storeId)
-          assert(!StateStore.isLoaded(storeId))
-
-          val store1reloaded = StateStore.get(
-            storeId, keySchema, valueSchema,
-            NoPrefixKeyStateEncoderSpec(keySchema),
-            1, None, None, useColumnFamilies = false,
-            storeConf, hadoopConf)
-          assert(StateStore.isLoaded(storeId))
-          assert(store1reloaded.version === 1)
-          put(store1reloaded, "a", 0, 2)
-          assert(store1reloaded.commit() === 2)
-          assert(rowPairsToDataSet(store1reloaded.iterator()) === Set(("a", 0) -> 2))
-        }
-      }
-    }
-  }
-
   test("reports memory usage") {
     // RocksDB metrics is only guaranteed to update when snapshot is created, so we set
     // minDeltasForSnapshot = 1 to enable snapshot generation here.
@@ -1626,19 +1641,6 @@ abstract class StateStoreSuiteBase[ProviderClass <: StateStoreProvider]
     assert(combinedMetrics.customMetrics(customSumMetric) == 30L)
     assert(combinedMetrics.customMetrics(customSizeMetric) == 20L)
     assert(combinedMetrics.customMetrics(customTimingMetric) == 400L)
-  }
-
-  test("SPARK-35659: StateStore.put cannot put null value") {
-    tryWithProviderResource(newStoreProvider()) { provider =>
-      // Verify state before starting a new set of updates
-      assert(getLatestData(provider, useColumnFamilies = false).isEmpty)
-
-      val store = provider.getStore(0)
-      val err = intercept[IllegalArgumentException] {
-        store.put(dataToKeyRow("key", 0), null)
-      }
-      assert(err.getMessage.contains("Cannot put a null value"))
-    }
   }
 
   test("SPARK-35763: StateStoreCustomMetric withNewDesc and createSQLMetric") {
