@@ -1179,6 +1179,7 @@ abstract class StateStoreSuiteBase[ProviderClass <: StateStoreProvider]
 
       assert(store.iterator().nonEmpty)
       assert(getLatestData(provider, useColumnFamilies = colFamiliesEnabled).isEmpty)
+
       // Make updates, commit and then verify state
       put(store, "b", 0, 2)
       put(store, "aa", 0, 3)
@@ -1379,8 +1380,8 @@ abstract class StateStoreSuiteBase[ProviderClass <: StateStoreProvider]
         }
       }
 
-      checkInvalidVersion(-1, false)
-      checkInvalidVersion(1, false)
+      checkInvalidVersion(-1, provider.isInstanceOf[HDFSBackedStateStoreProvider])
+      checkInvalidVersion(1, provider.isInstanceOf[HDFSBackedStateStoreProvider])
 
       val store = provider.getStore(0)
       put(store, "a", 0, 1)
@@ -1390,8 +1391,8 @@ abstract class StateStoreSuiteBase[ProviderClass <: StateStoreProvider]
       assert(rowPairsToDataSet(store1_.iterator()) === Set(("a", 0) -> 1))
       store1_.abort()
 
-      checkInvalidVersion(-1, false)
-      checkInvalidVersion(2, false)
+      checkInvalidVersion(-1, provider.isInstanceOf[HDFSBackedStateStoreProvider])
+      checkInvalidVersion(2, provider.isInstanceOf[HDFSBackedStateStoreProvider])
 
       // Update store version with some data
       val store1 = provider.getStore(1)
@@ -1401,8 +1402,8 @@ abstract class StateStoreSuiteBase[ProviderClass <: StateStoreProvider]
       val store2 = provider.getStore(2)
       assert(rowPairsToDataSet(store2.iterator()) === Set(("a", 0) -> 1, ("b", 0) -> 1))
       store2.abort()
-      checkInvalidVersion(-1, false)
-      checkInvalidVersion(3, false)
+      checkInvalidVersion(-1, provider.isInstanceOf[HDFSBackedStateStoreProvider])
+      checkInvalidVersion(3, provider.isInstanceOf[HDFSBackedStateStoreProvider])
     }
   }
 
@@ -1435,75 +1436,75 @@ abstract class StateStoreSuiteBase[ProviderClass <: StateStoreProvider]
   // This test illustrates state store iterator behavior differences leading to SPARK-38320.
   testWithAllCodec("SPARK-38320 - state store iterator behavior differences") {
     colFamiliesEnabled =>
-      val ROCKSDB_STATE_STORE = "RocksDBStateStore"
-      val dir = newDir()
-      val storeId = StateStoreId(dir, 0L, 1)
-      var version = 0L
+    val ROCKSDB_STATE_STORE = "RocksDBStateStore"
+    val dir = newDir()
+    val storeId = StateStoreId(dir, 0L, 1)
+    var version = 0L
 
-      tryWithProviderResource(newStoreProvider(storeId, colFamiliesEnabled)) { provider =>
-        val store = provider.getStore(version)
-        logInfo(s"Running SPARK-38320 test with state store ${store.getClass.getName}")
+    tryWithProviderResource(newStoreProvider(storeId, colFamiliesEnabled)) { provider =>
+      val store = provider.getStore(version)
+      logInfo(s"Running SPARK-38320 test with state store ${store.getClass.getName}")
 
-        val itr1 = store.iterator()  // itr1 is created before any writes to the store.
-        put(store, "1", 11, 100)
-        put(store, "2", 22, 200)
-        val itr2 = store.iterator()  // itr2 is created in the middle of the writes.
-        put(store, "1", 11, 101)  // Overwrite row (1, 11)
-        put(store, "3", 33, 300)
-        val itr3 = store.iterator()  // itr3 is created after all writes.
+      val itr1 = store.iterator()  // itr1 is created before any writes to the store.
+      put(store, "1", 11, 100)
+      put(store, "2", 22, 200)
+      val itr2 = store.iterator()  // itr2 is created in the middle of the writes.
+      put(store, "1", 11, 101)  // Overwrite row (1, 11)
+      put(store, "3", 33, 300)
+      val itr3 = store.iterator()  // itr3 is created after all writes.
 
-        val intermediateState = Set(("1", 11) -> 100, ("2", 22) -> 200) // The intermediate state.
-        val finalState = Set(("1", 11) -> 101,
-          ("2", 22) -> 200, ("3", 33) -> 300) // The final state.
-        // Itr1 does not see any updates - original state of the store (SPARK-38320)
-        assert(rowPairsToDataSet(itr1) === Set.empty[Set[((String, Int), Int)]])
-        if (store.getClass.getName contains ROCKSDB_STATE_STORE) {
-          assert(rowPairsToDataSet(itr2) === intermediateState)
-        } else {
-          assert(rowPairsToDataSet(itr2) === finalState)
-        }
-        assert(rowPairsToDataSet(itr3) === finalState)
+      val intermediateState = Set(("1", 11) -> 100, ("2", 22) -> 200) // The intermediate state.
+      val finalState = Set(("1", 11) -> 101,
+        ("2", 22) -> 200, ("3", 33) -> 300) // The final state.
+      // Itr1 does not see any updates - original state of the store (SPARK-38320)
+      assert(rowPairsToDataSet(itr1) === Set.empty[Set[((String, Int), Int)]])
+      if (store.getClass.getName contains ROCKSDB_STATE_STORE) {
+        assert(rowPairsToDataSet(itr2) === intermediateState)
+      } else {
+        assert(rowPairsToDataSet(itr2) === finalState)
+      }
+      assert(rowPairsToDataSet(itr3) === finalState)
 
-        version = store.commit()
+      version = store.commit()
+    }
+
+    // Reload the store from the commited version and repeat the above test.
+    tryWithProviderResource(newStoreProvider(storeId, colFamiliesEnabled)) { provider =>
+      assert(version > 0)
+      val store = provider.getStore(version)
+
+      val itr1 = store.iterator()  // itr1 is created before any writes to the store.
+      put(store, "3", 33, 301)  // Overwrite row (3, 33)
+      put(store, "4", 44, 400)
+      val itr2 = store.iterator()  // itr2 is created in the middle of the writes.
+      put(store, "4", 44, 401)  // Overwrite row (4, 44)
+      put(store, "5", 55, 500)
+      val itr3 = store.iterator()  // itr3 is created after all writes.
+
+      // The intermediate state
+      val intermediate = Set(
+        ("1", 11) -> 101, ("2", 22) -> 200, ("3", 33) -> 301, ("4", 44) -> 400)
+      // The final state.
+      val expected = Set(
+        ("1", 11) -> 101, ("2", 22) -> 200, ("3", 33) -> 301, ("4", 44) -> 401, ("5", 55) -> 500)
+      if (store.getClass.getName contains ROCKSDB_STATE_STORE) {
+        // RocksDB itr1 does not see any updates - original state of the store (SPARK-38320)
+        assert(rowPairsToDataSet(itr1) === Set(
+          ("1", 11) -> 101, ("2", 22) -> 200, ("3", 33) -> 300))
+      } else {
+        assert(rowPairsToDataSet(itr1) === expected)
       }
 
-      // Reload the store from the commited version and repeat the above test.
-      tryWithProviderResource(newStoreProvider(storeId, colFamiliesEnabled)) { provider =>
-        assert(version > 0)
-        val store = provider.getStore(version)
-
-        val itr1 = store.iterator()  // itr1 is created before any writes to the store.
-        put(store, "3", 33, 301)  // Overwrite row (3, 33)
-        put(store, "4", 44, 400)
-        val itr2 = store.iterator()  // itr2 is created in the middle of the writes.
-        put(store, "4", 44, 401)  // Overwrite row (4, 44)
-        put(store, "5", 55, 500)
-        val itr3 = store.iterator()  // itr3 is created after all writes.
-
-        // The intermediate state
-        val intermediate = Set(
-          ("1", 11) -> 101, ("2", 22) -> 200, ("3", 33) -> 301, ("4", 44) -> 400)
-        // The final state.
-        val expected = Set(
-          ("1", 11) -> 101, ("2", 22) -> 200, ("3", 33) -> 301, ("4", 44) -> 401, ("5", 55) -> 500)
-        if (store.getClass.getName contains ROCKSDB_STATE_STORE) {
-          // RocksDB itr1 does not see any updates - original state of the store (SPARK-38320)
-          assert(rowPairsToDataSet(itr1) === Set(
-            ("1", 11) -> 101, ("2", 22) -> 200, ("3", 33) -> 300))
-        } else {
-          assert(rowPairsToDataSet(itr1) === expected)
-        }
-
-        if (store.getClass.getName contains ROCKSDB_STATE_STORE) {
-          assert(rowPairsToDataSet(itr2) === intermediate)
-        } else {
-          assert(rowPairsToDataSet(itr2) === expected)
-        }
-
-        assert(rowPairsToDataSet(itr3) === expected)
-
-        version = store.commit()
+      if (store.getClass.getName contains ROCKSDB_STATE_STORE) {
+        assert(rowPairsToDataSet(itr2) === intermediate)
+      } else {
+        assert(rowPairsToDataSet(itr2) === expected)
       }
+
+      assert(rowPairsToDataSet(itr3) === expected)
+
+      version = store.commit()
+    }
   }
 
   test("StateStore.get") {
@@ -1522,8 +1523,8 @@ abstract class StateStoreSuiteBase[ProviderClass <: StateStoreProvider]
           var e = intercept[SparkException] {
             StateStore.get(
               storeId, keySchema, valueSchema,
-              NoPrefixKeyStateEncoderSpec(keySchema), -1, None, None, useColumnFamilies = false,
-              storeConf, hadoopConf)
+                NoPrefixKeyStateEncoderSpec(keySchema), -1, None, None, useColumnFamilies = false,
+                storeConf, hadoopConf)
           }
           checkError(
             e,
