@@ -24,7 +24,9 @@ import javax.annotation.concurrent.GuardedBy
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.errors.QueryExecutionErrors
 
-class RocksDBStateStoreProviderStateMachine(rocksDBConf: RocksDBConf) extends Logging {
+class RocksDBStateStoreProviderStateMachine(
+    stateStoreId: StateStoreId,
+    rocksDBConf: RocksDBConf) extends Logging {
 
   private sealed trait STATE
   private case object RELEASED extends STATE
@@ -42,6 +44,8 @@ class RocksDBStateStoreProviderStateMachine(rocksDBConf: RocksDBConf) extends Lo
   private val instanceLock = new Object()
   @GuardedBy("instanceLock")
   private var state: STATE = RELEASED
+  @GuardedBy("instanceLock")
+  private var acquiredThreadInfo: AcquiredThreadInfo = _
 
   // Can be read without holding any locks, but should only be updated when
   // instanceLock is held.
@@ -69,8 +73,13 @@ class RocksDBStateStoreProviderStateMachine(rocksDBConf: RocksDBConf) extends Lo
       instanceLock.wait(10)
     }
     if (state == ACQUIRED) {
-      throw QueryExecutionErrors.unreleasedThreadError("todo", transition.toString,
-        "todo", "todo", timeWaitedMs, "todo")
+      val newAcquiredThreadInfo = AcquiredThreadInfo()
+      val stackTraceOutput = acquiredThreadInfo.threadRef.get.get.getStackTrace.mkString("\n")
+      val loggingId = s"StateStoreId(opId=${stateStoreId.operatorId}," +
+        s"partId=${stateStoreId.partitionId},name=${stateStoreId.storeName})"
+      throw QueryExecutionErrors.unreleasedThreadError(loggingId, transition.toString,
+        newAcquiredThreadInfo.toString(), acquiredThreadInfo.toString(), timeWaitedMs,
+        stackTraceOutput)
     }
   }
 
@@ -110,6 +119,9 @@ class RocksDBStateStoreProviderStateMachine(rocksDBConf: RocksDBConf) extends Lo
         }
     }
     state = newState
+    if (newState == ACQUIRED) {
+      acquiredThreadInfo = AcquiredThreadInfo()
+    }
     (oldState, newState)
   }
 

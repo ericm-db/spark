@@ -170,45 +170,6 @@ class StateStoreSuite extends StateStoreSuiteBase[HDFSBackedStateStoreProvider]
     require(!StateStore.isMaintenanceRunning)
   }
 
-  testWithAllCodec("two concurrent StateStores - one for read-only and one for read-write") {
-    colFamiliesEnabled =>
-      // During Streaming Aggregation, we have two StateStores per task, one used as read-only in
-      // `StateStoreRestoreExec`, and one read-write used in `StateStoreSaveExec`.
-      // `StateStore.abort`
-      // will be called for these StateStores if they haven't committed their results. We need to
-      // make sure that `abort` in read-only store after a `commit` in the read-write store doesn't
-      // accidentally lead to the deletion of state.
-      val dir = newDir()
-      val storeId = StateStoreId(dir, 0L, 1)
-      val key1 = "a"
-      val key2 = 0
-
-      tryWithProviderResource(newStoreProvider(storeId, colFamiliesEnabled)) { provider0 =>
-        // prime state
-        val store = provider0.getStore(0)
-
-        put(store, key1, key2, 1)
-        store.commit()
-        assert(rowPairsToDataSet(provider0.getStore(1).iterator()) === Set((key1, key2) -> 1))
-      }
-
-      // two state stores
-      tryWithProviderResource(newStoreProvider(storeId, colFamiliesEnabled)) { provider1 =>
-        val restoreStore = provider1.getReadStore(1)
-        val saveStore = provider1.getStore(1)
-
-        put(saveStore, key1, key2, get(restoreStore, key1, key2).get + 1)
-        saveStore.commit()
-        restoreStore.abort()
-      }
-
-      // check that state is correct for next batch
-      tryWithProviderResource(newStoreProvider(storeId, colFamiliesEnabled)) { provider2 =>
-        val finalStore = provider2.getStore(2)
-        assert(rowPairsToDataSet(finalStore.iterator()) === Set((key1, key2) -> 2))
-      }
-  }
-
   test("retaining only two latest versions when MAX_BATCHES_TO_RETAIN_IN_MEMORY set to 2") {
     tryWithProviderResource(
       newStoreProvider(minDeltasForSnapshot = 10, numOfVersToRetainInMemory = 2)) { provider =>
@@ -1431,6 +1392,47 @@ abstract class StateStoreSuiteBase[ProviderClass <: StateStoreProvider]
       assert(e.getMessage contains "Error writing state store files")
       assert(e.getCause.getMessage.contains("Failed to rename"))
     }
+  }
+
+  testWithAllCodec("two concurrent StateStores - one for read-only and one for read-write") {
+    colFamiliesEnabled =>
+      // During Streaming Aggregation, we have two StateStores per task, one used as read-only in
+      // `StateStoreRestoreExec`, and one read-write used in `StateStoreSaveExec`.
+      // `StateStore.abort`
+      // will be called for these StateStores if they haven't committed their results. We need to
+      // make sure that `abort` in read-only store after a `commit` in the read-write store doesn't
+      // accidentally lead to the deletion of state.
+      val dir = newDir()
+      val storeId = StateStoreId(dir, 0L, 1)
+      val key1 = "a"
+      val key2 = 0
+
+      tryWithProviderResource(newStoreProvider(storeId, colFamiliesEnabled)) { provider0 =>
+        // prime state
+        val store = provider0.getStore(0)
+
+        put(store, key1, key2, 1)
+        store.commit()
+        val store1 = provider0.getStore(1)
+        assert(rowPairsToDataSet(store1.iterator()) === Set((key1, key2) -> 1))
+        store1.commit()
+      }
+
+      // two state stores
+      tryWithProviderResource(newStoreProvider(storeId, colFamiliesEnabled)) { provider1 =>
+        val restoreStore = provider1.getReadStore(1)
+        val saveStore = provider1.getStore(1)
+
+        put(saveStore, key1, key2, get(restoreStore, key1, key2).get + 1)
+        saveStore.commit()
+        restoreStore.abort()
+      }
+
+      // check that state is correct for next batch
+      tryWithProviderResource(newStoreProvider(storeId, colFamiliesEnabled)) { provider2 =>
+        val finalStore = provider2.getStore(2)
+        assert(rowPairsToDataSet(finalStore.iterator()) === Set((key1, key2) -> 2))
+      }
   }
 
   // This test illustrates state store iterator behavior differences leading to SPARK-38320.

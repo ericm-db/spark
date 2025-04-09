@@ -555,7 +555,7 @@ private[sql] class RocksDBStateStoreProvider
   override def stateStoreId: StateStoreId = stateStoreId_
 
   private lazy val stateMachine: RocksDBStateStoreProviderStateMachine =
-    new RocksDBStateStoreProviderStateMachine(RocksDBConf(storeConf))
+    new RocksDBStateStoreProviderStateMachine(stateStoreId, RocksDBConf(storeConf))
 
   override def getStore(version: Long, uniqueId: Option[String] = None): StateStore = {
     try {
