@@ -353,8 +353,8 @@ private[sql] class RocksDBStateStoreProvider
         logInfo(log"Aborting ${MDC(VERSION_NUM, version + 1)} " +
           log"for ${MDC(STATE_STORE_ID, id)}")
         rocksDB.rollback()
-        stateMachine.releaseStore(stamp)
         validateAndTransitionState(ABORT)
+        stateMachine.releaseStore(stamp)
       }
     }
 
