@@ -1421,7 +1421,7 @@ abstract class StateStoreSuiteBase[ProviderClass <: StateStoreProvider]
       // two state stores
       tryWithProviderResource(newStoreProvider(storeId, colFamiliesEnabled)) { provider1 =>
         val restoreStore = provider1.getReadStore(1)
-        val saveStore = provider1.getStore(1)
+        val saveStore = provider1.getWriteStore(restoreStore, 1)
 
         put(saveStore, key1, key2, get(restoreStore, key1, key2).get + 1)
         saveStore.commit()
@@ -1432,6 +1432,7 @@ abstract class StateStoreSuiteBase[ProviderClass <: StateStoreProvider]
       tryWithProviderResource(newStoreProvider(storeId, colFamiliesEnabled)) { provider2 =>
         val finalStore = provider2.getStore(2)
         assert(rowPairsToDataSet(finalStore.iterator()) === Set((key1, key2) -> 2))
+        finalStore.commit()
       }
   }
 

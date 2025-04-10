@@ -43,7 +43,7 @@ private[sql] class RocksDBStateStoreProvider
   with SupportsFineGrainedReplay {
   import RocksDBStateStoreProvider._
 
-  class RocksDBStateStore(lastVersion: Long, stamp: Long) extends StateStore {
+  class RocksDBStateStore(lastVersion: Long, val stamp: Long) extends StateStore {
     /** Trait and classes representing the internal state of the store */
     trait STATE
     case object UPDATING extends STATE
@@ -57,6 +57,15 @@ private[sql] class RocksDBStateStoreProvider
     private case object METRICS extends TRANSITION
 
     @volatile private var state: STATE = UPDATING
+
+    @volatile private var usedToCreateWriteStore: Boolean = false
+
+    override def getReadStamp: Long = {
+      usedToCreateWriteStore = true
+      stamp
+    }
+
+    override def usedForWriteStore: Boolean = usedToCreateWriteStore
 
     /**
      * Validates the expected state, throws exception if state is not as expected.
@@ -328,14 +337,15 @@ private[sql] class RocksDBStateStoreProvider
     private var storedMetrics: Option[RocksDBMetrics] = None
 
     override def commit(): Long = synchronized {
+      if (usedToCreateWriteStore) {
+        return -1
+      }
       validateState(List(UPDATING))
-
       try {
         verify(state == UPDATING, "Cannot commit after already committed or aborted")
         val (newVersion, newCheckpointInfo) = rocksDB.commit()
         checkpointInfo = Some(newCheckpointInfo)
         storedMetrics = rocksDB.metricsOpt
-
         validateAndTransitionState(COMMIT)
         stateMachine.releaseStore(stamp)
 
@@ -349,6 +359,9 @@ private[sql] class RocksDBStateStoreProvider
     }
 
     override def abort(): Unit = {
+      if (usedToCreateWriteStore) {
+        return
+      }
       if (validateState(List(UPDATING, ABORTED)) != ABORTED) {
         logInfo(log"Aborting ${MDC(VERSION_NUM, version + 1)} " +
           log"for ${MDC(STATE_STORE_ID, id)}")
@@ -576,6 +589,38 @@ private[sql] class RocksDBStateStoreProvider
       }
     }
     catch {
+      case e: SparkException
+        if Option(e.getCondition).exists(_.contains("CANNOT_LOAD_STATE_STORE")) =>
+        throw e
+      case e: OutOfMemoryError =>
+        throw QueryExecutionErrors.notEnoughMemoryToLoadStore(
+          stateStoreId.toString,
+          "ROCKSDB_STORE_PROVIDER",
+          e)
+      case e: Throwable => throw QueryExecutionErrors.cannotLoadStore(e)
+    }
+  }
+
+  override def getWriteStore(
+      readStore: ReadStateStore,
+      version: Long,
+      uniqueId: Option[String] = None): StateStore = {
+    try {
+      if (version < 0) {
+        throw QueryExecutionErrors.unexpectedStateStoreVersion(version)
+      }
+      try {
+        rocksDB.load(
+          version,
+          stateStoreCkptId = if (storeConf.enableStateStoreCheckpointIds) uniqueId else None,
+          readOnly = false)
+        new RocksDBStateStore(version, readStore.getReadStamp)
+      } catch {
+        case e: Throwable =>
+          stateMachine.releaseStore(readStore.getReadStamp)
+          throw e
+      }
+    } catch {
       case e: SparkException
         if Option(e.getCondition).exists(_.contains("CANNOT_LOAD_STATE_STORE")) =>
         throw e

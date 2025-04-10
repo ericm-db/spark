@@ -74,6 +74,10 @@ trait ReadStateStore {
   /** Version of the data in this store before committing updates. */
   def version: Long
 
+  def getReadStamp: Long = -1
+
+  def usedForWriteStore: Boolean = false
+
   /**
    * Get the current value of a non-null key.
    * @return a non-null row if the key exists in the store, otherwise null.
@@ -568,6 +572,11 @@ trait StateStoreProvider {
   def getStore(
       version: Long,
       stateStoreCkptId: Option[String] = None): StateStore
+
+  def getWriteStore(
+      readStore: ReadStateStore,
+      version: Long,
+      uniqueId: Option[String] = None): StateStore = getStore(version, uniqueId)
 
   /**
    * Return an instance of [[ReadStateStore]] representing state data of the given version
