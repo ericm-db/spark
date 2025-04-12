@@ -144,15 +144,19 @@ class StateStoreRDD[T: ClassTag, U: ClassTag](
 
   // Recursively find a state store provider in the RDD lineage
   private def findStateStoreProvider(rdd: RDD[_]): Option[StateStoreRDDProvider] = {
-    rdd match {
-      case provider: StateStoreRDDProvider => Some(provider)
-      case _ if rdd.dependencies.isEmpty => None
-      case _ =>
-        // Search all dependencies
-        rdd.dependencies.view
-          .map(dep => findStateStoreProvider(dep.rdd))
-          .find(_.isDefined)
-          .flatten
+    if (rdd == null) {
+      None
+    } else {
+      rdd match {
+        case provider: StateStoreRDDProvider => Some(provider)
+        case _ if rdd.dependencies.isEmpty => None
+        case _ =>
+          // Search all dependencies
+          rdd.dependencies.view
+            .map(dep => findStateStoreProvider(dep.rdd))
+            .find(_.isDefined)
+            .flatten
+      }
     }
   }
 
