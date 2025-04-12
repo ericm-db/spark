@@ -27,6 +27,10 @@ import org.apache.spark.sql.internal.SessionState
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.util.SerializableConfiguration
 
+trait StateStoreRDDProvider {
+  def getStateStoreForPartition(partitionId: Int): Option[ReadStateStore]
+}
+
 abstract class BaseStateStoreRDD[T: ClassTag, U: ClassTag](
     dataRDD: RDD[T],
     checkpointLocation: String,
@@ -82,7 +86,17 @@ class ReadStateStoreRDD[T: ClassTag, U: ClassTag](
     useColumnFamilies: Boolean = false,
     extraOptions: Map[String, String] = Map.empty)
   extends BaseStateStoreRDD[T, U](dataRDD, checkpointLocation, queryRunId, operatorId,
-    sessionState, storeCoordinator, extraOptions) {
+    sessionState, storeCoordinator, extraOptions) with StateStoreRDDProvider {
+
+  // ThreadLocal to store state stores by partition ID
+  @transient private lazy val partitionStores =
+  new ThreadLocal[Map[Int, ReadStateStore]]() {
+    override def initialValue(): Map[Int, ReadStateStore] = Map.empty
+  }
+
+  override def getStateStoreForPartition(partitionId: Int): Option[ReadStateStore] = {
+    Option(partitionStores.get()).flatMap(_.get(partitionId))
+  }
 
   override protected def getPartitions: Array[Partition] = dataRDD.partitions
 
@@ -95,6 +109,8 @@ class ReadStateStoreRDD[T: ClassTag, U: ClassTag](
       stateStoreCkptIds.map(_.apply(partition.index).head),
       stateSchemaBroadcast,
       useColumnFamilies, storeConf, hadoopConfBroadcast.value.value)
+    // Store reference for this partition
+    partitionStores.set(partitionStores.get() + (partition.index -> store))
     storeReadFunction(store, inputIter)
   }
 }
@@ -126,16 +142,59 @@ class StateStoreRDD[T: ClassTag, U: ClassTag](
 
   override protected def getPartitions: Array[Partition] = dataRDD.partitions
 
+  // Recursively find a state store provider in the RDD lineage
+  private def findStateStoreProvider(rdd: RDD[_]): Option[StateStoreRDDProvider] = {
+    rdd match {
+      case provider: StateStoreRDDProvider => Some(provider)
+      case _ if rdd.dependencies.isEmpty => None
+      case _ =>
+        // Search all dependencies
+        rdd.dependencies.view
+          .map(dep => findStateStoreProvider(dep.rdd))
+          .find(_.isDefined)
+          .flatten
+    }
+  }
+
   override def compute(partition: Partition, ctxt: TaskContext): Iterator[U] = {
     val storeProviderId = getStateProviderId(partition)
-
     val inputIter = dataRDD.iterator(partition, ctxt)
-    val store = StateStore.get(
-      storeProviderId, keySchema, valueSchema, keyStateEncoderSpec, storeVersion,
-      uniqueId.map(_.apply(partition.index).head),
-      stateSchemaBroadcast,
-      useColumnFamilies, storeConf, hadoopConfBroadcast.value.value,
-      useMultipleValuesPerKey)
+
+    // Try to find a state store provider in the RDD lineage
+    val store = findStateStoreProvider(dataRDD).flatMap { provider =>
+      provider.getStateStoreForPartition(partition.index)
+    } match {
+      case Some(readStore) =>
+        // Convert the read store to a writable store
+        StateStore.getWriteStore(
+          readStore,
+          storeProviderId,
+          keySchema,
+          valueSchema,
+          keyStateEncoderSpec,
+          storeVersion,
+          uniqueId.map(_.apply(partition.index).head),
+          stateSchemaBroadcast,
+          useColumnFamilies,
+          storeConf,
+          hadoopConfBroadcast.value.value,
+          useMultipleValuesPerKey)
+
+      case None =>
+        // Fall back to creating a new store
+        StateStore.get(
+          storeProviderId,
+          keySchema,
+          valueSchema,
+          keyStateEncoderSpec,
+          storeVersion,
+          uniqueId.map(_.apply(partition.index).head),
+          stateSchemaBroadcast,
+          useColumnFamilies,
+          storeConf,
+          hadoopConfBroadcast.value.value,
+          useMultipleValuesPerKey)
+    }
     storeUpdateFunction(store, inputIter)
   }
 }

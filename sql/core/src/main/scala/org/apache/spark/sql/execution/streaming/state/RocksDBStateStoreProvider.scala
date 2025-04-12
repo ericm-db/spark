@@ -20,6 +20,7 @@ package org.apache.spark.sql.execution.streaming.state
 import java.io._
 import java.util.UUID
 import java.util.concurrent.{ConcurrentHashMap, TimeUnit}
+import java.util.concurrent.atomic.AtomicBoolean
 
 import scala.util.control.NonFatal
 
@@ -58,14 +59,14 @@ private[sql] class RocksDBStateStoreProvider
 
     @volatile private var state: STATE = UPDATING
 
-    @volatile private var usedToCreateWriteStore: Boolean = false
+    private val usedToCreateWriteStore: AtomicBoolean = new AtomicBoolean(false)
 
     override def getReadStamp: Long = {
-      usedToCreateWriteStore = true
+      usedToCreateWriteStore.set(true)
       stamp
     }
 
-    override def usedForWriteStore: Boolean = usedToCreateWriteStore
+    override def usedForWriteStore: Boolean = usedToCreateWriteStore.get()
 
     /**
      * Validates the expected state, throws exception if state is not as expected.
@@ -132,7 +133,9 @@ private[sql] class RocksDBStateStoreProvider
     Option(TaskContext.get()).foreach(_.addTaskCompletionListener[Unit] {
       _ =>
         try {
-          abort()
+          if (state == UPDATING) {
+            abort()
+          }
         } catch {
           case NonFatal(e) =>
             logWarning("Failed to abort state store", e)
@@ -337,7 +340,7 @@ private[sql] class RocksDBStateStoreProvider
     private var storedMetrics: Option[RocksDBMetrics] = None
 
     override def commit(): Long = synchronized {
-      if (usedToCreateWriteStore) {
+      if (usedToCreateWriteStore.get()) {
         return -1
       }
       validateState(List(UPDATING))
@@ -359,7 +362,7 @@ private[sql] class RocksDBStateStoreProvider
     }
 
     override def abort(): Unit = {
-      if (usedToCreateWriteStore) {
+      if (usedToCreateWriteStore.get()) {
         return
       }
       if (validateState(List(UPDATING, ABORTED)) != ABORTED) {
