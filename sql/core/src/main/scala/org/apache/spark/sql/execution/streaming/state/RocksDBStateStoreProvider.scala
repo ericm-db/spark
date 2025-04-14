@@ -612,6 +612,7 @@ private[sql] class RocksDBStateStoreProvider
       if (version < 0) {
         throw QueryExecutionErrors.unexpectedStateStoreVersion(version)
       }
+      assert(version == readStore.version)
       try {
         rocksDB.load(
           version,
