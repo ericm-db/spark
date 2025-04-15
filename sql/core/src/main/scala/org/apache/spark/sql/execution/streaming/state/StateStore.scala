@@ -76,8 +76,6 @@ trait ReadStateStore extends Logging {
 
   def getReadStamp: Long = -1
 
-  def usedForWriteStore: Boolean = false
-
   /**
    * Get the current value of a non-null key.
    * @return a non-null row if the key exists in the store, otherwise null.

@@ -63,8 +63,6 @@ case class CkptIdCollectingStateStoreWrapper(innerStore: StateStore) extends Sta
 
   override def getReadStamp: Long = innerStore.getReadStamp
 
-  override def usedForWriteStore: Boolean = innerStore.usedForWriteStore
-
   override def get(
       key: UnsafeRow,
       colFamilyName: String = StateStore.DEFAULT_COL_FAMILY_NAME): UnsafeRow = {

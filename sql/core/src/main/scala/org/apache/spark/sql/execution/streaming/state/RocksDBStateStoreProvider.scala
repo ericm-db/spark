@@ -20,7 +20,6 @@ package org.apache.spark.sql.execution.streaming.state
 import java.io._
 import java.util.UUID
 import java.util.concurrent.{ConcurrentHashMap, TimeUnit}
-import java.util.concurrent.atomic.AtomicBoolean
 
 import scala.util.control.NonFatal
 
@@ -59,14 +58,9 @@ private[sql] class RocksDBStateStoreProvider
 
     @volatile private var state: STATE = UPDATING
 
-    private val usedToCreateWriteStore: AtomicBoolean = new AtomicBoolean(false)
-
     override def getReadStamp: Long = {
-      usedToCreateWriteStore.set(true)
       stamp
     }
-
-    override def usedForWriteStore: Boolean = usedToCreateWriteStore.get()
 
     /**
      * Validates the expected state, throws exception if state is not as expected.
@@ -340,9 +334,6 @@ private[sql] class RocksDBStateStoreProvider
     private var storedMetrics: Option[RocksDBMetrics] = None
 
     override def commit(): Long = synchronized {
-      if (usedToCreateWriteStore.get()) {
-        return -1
-      }
       validateState(List(UPDATING))
       try {
         verify(state == UPDATING, "Cannot commit after already committed or aborted")
@@ -362,9 +353,6 @@ private[sql] class RocksDBStateStoreProvider
     }
 
     override def abort(): Unit = {
-      if (usedToCreateWriteStore.get()) {
-        return
-      }
       if (validateState(List(UPDATING, ABORTED)) != ABORTED) {
         logInfo(log"Aborting ${MDC(VERSION_NUM, version + 1)} " +
           log"for ${MDC(STATE_STORE_ID, id)}")
@@ -618,7 +606,12 @@ private[sql] class RocksDBStateStoreProvider
           version,
           stateStoreCkptId = if (storeConf.enableStateStoreCheckpointIds) uniqueId else None,
           readOnly = false)
-        new RocksDBStateStore(version, readStore.getReadStamp)
+        readStore match {
+          case stateStore: RocksDBStateStore =>
+            stateStore
+          case _ =>
+            throw new IllegalArgumentException
+        }
       } catch {
         case e: Throwable =>
           stateMachine.releaseStore(readStore.getReadStamp)
