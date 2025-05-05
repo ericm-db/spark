@@ -81,7 +81,7 @@ class RocksDBStateStoreProviderStateMachine(
   // Can be read without holding any locks, but should only be updated when
   // instanceLock is held.
   // -1 indicates that the store is not locked.
-  private[sql] val currentValidStamp = new AtomicLong(-1L)
+  private[state] val currentValidStamp = new AtomicLong(-1L)
   @GuardedBy("instanceLock")
   private var lastValidStamp: Long = 0L
 
