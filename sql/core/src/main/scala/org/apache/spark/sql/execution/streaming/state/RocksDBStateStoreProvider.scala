@@ -54,6 +54,10 @@ private[sql] class RocksDBStateStoreProvider
     @volatile private var state: STATE = UPDATING
 
     Option(TaskContext.get()).foreach { ctxt =>
+      // Failure listeners are invoked before completion listeners.
+      // Listeners are invoked in LIFO manner compared to their
+      // registration, so we should not register any listeners
+      // after this one that could interfere with this logic.
       ctxt.addTaskCompletionListener[Unit]( ctx => {
         if (state == UPDATING) {
           if (readOnly) {
