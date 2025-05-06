@@ -43,7 +43,7 @@ private[sql] class RocksDBStateStoreProvider
   with SupportsFineGrainedReplay {
   import RocksDBStateStoreProvider._
 
-  class RocksDBStateStore(lastVersion: Long) extends StateStore {
+  class RocksDBStateStore(lastVersion: Long, var readOnly: Boolean) extends StateStore {
     /** Trait and classes representing the internal state of the store */
     trait STATE
     case object UPDATING extends STATE
@@ -56,12 +56,25 @@ private[sql] class RocksDBStateStoreProvider
     Option(TaskContext.get()).foreach { ctxt =>
       ctxt.addTaskCompletionListener[Unit]( ctx => {
         if (state == UPDATING) {
-          abort()
-          // Only throw error if the task is not already failed or interrupted
-          if (!ctx.isFailed() && !ctx.isInterrupted()) {
-            throw StateStoreErrors.stateStoreUpdatingAfterTaskCompletion(id)
+          if (readOnly) {
+            release() // Only release, do not throw an error because we rely on
+                      // CompletionListener to release for read-only store in
+                      // mapPartitionsWithReadStateStore.
+          } else {
+            abort() // Abort since this is an error if stateful task completes
+                    // without committing or aborting
+            // Only throw error if the task is not already failed or interrupted
+            // so that we don't override the original error.
+            if (!ctx.isFailed() && !ctx.isInterrupted()) {
+              throw StateStoreErrors.stateStoreUpdatingAfterTaskCompletion(id)
+            }
           }
         }
+      })
+
+      ctxt.addTaskFailureListener( (_, _) => {
+        abort() // Either the store is already aborted (this is a no-op) or
+                // we need to abort it.
       })
     }
 
@@ -502,13 +515,15 @@ private[sql] class RocksDBStateStoreProvider
           // We need to match like this as opposed to case Some(ss: RocksDBStateStore)
           // because of how the tests create the class in StateStoreRDDSuite
           case Some(stateStore: ReadStateStore) if stateStore.isInstanceOf[RocksDBStateStore] =>
+            val rocksDBStateStore = stateStore.asInstanceOf[RocksDBStateStore]
+            rocksDBStateStore.readOnly = readOnly
             stateStore.asInstanceOf[StateStore]
           case Some(other) =>
             throw new IllegalArgumentException(s"Existing store must be a RocksDBStateStore," +
               s" store is actually ${other.getClass.getSimpleName}")
           case None =>
             // Create new store instance for getStore/getReadStore cases
-            new RocksDBStateStore(version)
+            new RocksDBStateStore(version, readOnly)
         }
       } catch {
         case e: Throwable =>
@@ -632,7 +647,8 @@ private[sql] class RocksDBStateStoreProvider
    * @param endVersion   checkpoint version to end with
    * @return [[StateStore]]
    */
-  override def replayStateFromSnapshot(snapshotVersion: Long, endVersion: Long): StateStore = {
+  override def replayStateFromSnapshot(snapshotVersion: Long, endVersion: Long,
+                                       readOnly: Boolean): StateStore = {
     try {
       if (snapshotVersion < 1) {
         throw QueryExecutionErrors.unexpectedStateStoreVersion(snapshotVersion)
@@ -641,7 +657,7 @@ private[sql] class RocksDBStateStoreProvider
         throw QueryExecutionErrors.unexpectedStateStoreVersion(endVersion)
       }
       rocksDB.loadFromSnapshot(snapshotVersion, endVersion)
-      new RocksDBStateStore(endVersion)
+      new RocksDBStateStore(endVersion, readOnly)
     }
     catch {
       case e: OutOfMemoryError =>
