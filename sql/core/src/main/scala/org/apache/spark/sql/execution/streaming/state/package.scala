@@ -67,16 +67,8 @@ package object state {
 
       val cleanedF = dataRDD.sparkContext.clean(storeUpdateFunction)
       val wrappedF = (store: StateStore, iter: Iterator[T]) => {
-        // Abort the state store in case of error
-        val ctxt = TaskContext.get()
-        ctxt.addTaskCompletionListener[Unit](_ => {
-          if (!store.hasCommitted) store.abort()
-        })
-        ctxt.addTaskFailureListener(new TaskFailureListener {
-          override def onTaskFailure(context: TaskContext, error: Throwable): Unit = {
-            store.abort()
-          }
-        })
+        // Do not add CompletionListener here to clean up the state store because
+        // it is already added in RocksDBStateStore/HDFSBackedStateStore.
         cleanedF(store, iter)
       }
 
@@ -115,12 +107,10 @@ package object state {
 
       val cleanedF = dataRDD.sparkContext.clean(storeReadFn)
       val wrappedF = (store: ReadStateStore, iter: Iterator[T]) => {
-        // Clean up the state store.
-        val ctxt = TaskContext.get()
-        ctxt.addTaskCompletionListener[Unit](_ => {
-          if (!StateStoreThreadLocalTracker.isUsedForWriteStore) {
-            store.release()
-          }
+        // Do not call abort/release here to clean up the state store because
+        // it is already added in RocksDBStateStore/HDFSBackedStateStore.
+        // However, we still do need to clear the store from the StateStoreThreadLocalTracker.
+        TaskContext.get().addTaskCompletionListener[Unit](_ => {
           StateStoreThreadLocalTracker.clearStore()
         })
         cleanedF(store, iter)
