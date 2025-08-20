@@ -303,4 +303,14 @@ abstract class DataStreamReader {
 
   protected def validateXmlSchema(): Unit = ()
 
+  /**
+   * Define the order of sources for sequential processing. Sources will be processed
+   * in the specified order, with each bounded source completing before the next begins.
+   *
+   * @param sourceNames The names of sources in processing order
+   * @return A new DataStreamReader configured for sequential processing
+   * @since 4.1.0
+   */
+  def orderBy(sourceNames: String*): DataStreamReader
+
 }

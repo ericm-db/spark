@@ -147,4 +147,9 @@ final class DataStreamReader private[sql] (sparkSession: SparkSession)
 
   /** @inheritdoc */
   override def textFile(path: String): Dataset[String] = super.textFile(path)
+
+  /** @inheritdoc */
+  def orderBy(sourceNames: String*): DataStreamReader = {
+    throw new UnsupportedOperationException("Sequential sources not yet supported in Spark Connect")
+  }
 }

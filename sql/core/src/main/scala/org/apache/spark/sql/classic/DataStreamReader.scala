@@ -43,7 +43,13 @@ final class DataStreamReader private[sql](sparkSession: SparkSession)
   extends streaming.DataStreamReader {
   /** @inheritdoc */
   def format(source: String): this.type = {
+    // If we have a current source being configured, save it and start a new one
+    if (currentSourceName.isDefined) {
+      saveCurrentSourceConfig()
+    }
+
     this.source = source
+    this.currentSourceName = None // Will be set when name() is called
     this
   }
 
@@ -51,6 +57,11 @@ final class DataStreamReader private[sql](sparkSession: SparkSession)
   override def name(sourceName: String): this.type = {
     OffsetSeqV2.validateSourceName(sourceName)
     this.userSpecifiedName = Some(sourceName)
+    this.currentSourceName = Some(sourceName)
+
+    // Initialize config for this source with the format
+    val config = Map("format" -> source)
+    multiSourceConfigs = multiSourceConfigs + (sourceName -> config)
     this
   }
 
@@ -65,13 +76,31 @@ final class DataStreamReader private[sql](sparkSession: SparkSession)
 
   /** @inheritdoc */
   def option(key: String, value: String): this.type = {
-    this.extraOptions += (key -> value)
+    // If we're building multi-source config, add to current source
+    currentSourceName match {
+      case Some(sourceName) =>
+        val currentConfig = multiSourceConfigs.getOrElse(sourceName, Map.empty)
+        val updatedConfig = currentConfig + (key -> value)
+        multiSourceConfigs = multiSourceConfigs + (sourceName -> updatedConfig)
+      case None =>
+        // Fall back to single-source behavior
+        this.extraOptions += (key -> value)
+    }
     this
   }
 
   /** @inheritdoc */
   def options(options: scala.collection.Map[String, String]): this.type = {
-    this.extraOptions ++= options
+    // If we're building multi-source config, add to current source
+    currentSourceName match {
+      case Some(sourceName) =>
+        val currentConfig = multiSourceConfigs.getOrElse(sourceName, Map.empty)
+        val updatedConfig = currentConfig ++ options
+        multiSourceConfigs = multiSourceConfigs + (sourceName -> updatedConfig)
+      case None =>
+        // Fall back to single-source behavior
+        this.extraOptions ++= options
+    }
     this
   }
 
@@ -161,6 +190,41 @@ final class DataStreamReader private[sql](sparkSession: SparkSession)
   /** @inheritdoc */
   override def textFile(path: String): Dataset[String] = super.textFile(path)
 
+  def orderBy(sourceNames: String*): DataStreamReader = {
+    require(sourceNames.nonEmpty, "At least one source name must be specified")
+    require(multiSourceConfigs.nonEmpty, "No sources have been configured. " +
+      "Use .format().name().option() to configure sources before calling orderBy()")
+
+    // Validate that all specified source names have been configured
+    val configuredNames = multiSourceConfigs.keys.toSet
+    val missingNames = sourceNames.toSet -- configuredNames
+    require(missingNames.isEmpty,
+      s"Sources not configured: ${missingNames.mkString(", ")}. " +
+      s"Available sources: ${configuredNames.mkString(", ")}")
+
+    // Create a new reader configured for sequential processing
+    val newReader = new DataStreamReader(sparkSession)
+    newReader.source = "sequential"
+    newReader.extraOptions = CaseInsensitiveMap(Map(
+      "sequential.order" -> sourceNames.mkString(",")
+    ))
+
+    // Add all source configurations with proper prefixing
+    multiSourceConfigs.foreach { case (sourceName, config) =>
+      config.foreach { case (key, value) =>
+        newReader.extraOptions += (s"$sourceName.$key" -> value)
+      }
+    }
+
+    newReader
+  }
+
+  private def saveCurrentSourceConfig(): Unit = {
+    // This method is called when starting a new source configuration
+    // Currently, the configuration is saved immediately in the name() method,
+    // so this is a placeholder for any future cleanup logic
+  }
+
   ///////////////////////////////////////////////////////////////////////////////////////
   // Builder pattern config options
   ///////////////////////////////////////////////////////////////////////////////////////
@@ -172,4 +236,8 @@ final class DataStreamReader private[sql](sparkSession: SparkSession)
   private var userSpecifiedName: Option[String] = None
 
   private var extraOptions = CaseInsensitiveMap[String](Map.empty)
+
+  // Support for multi-source configuration
+  private var multiSourceConfigs: Map[String, Map[String, String]] = Map.empty
+  private var currentSourceName: Option[String] = None
 }
