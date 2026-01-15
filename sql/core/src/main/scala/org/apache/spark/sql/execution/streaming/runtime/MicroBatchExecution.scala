@@ -30,7 +30,7 @@ import org.apache.spark.internal.LogKeys._
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, CurrentBatchTimestamp, CurrentDate, CurrentTimestamp, FileSourceMetadataAttribute, LocalTimestamp}
 import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Deduplicate, DeduplicateWithinWatermark, Distinct, FlatMapGroupsInPandasWithState, FlatMapGroupsWithState, GlobalLimit, Join, LeafNode, LocalRelation, LogicalPlan, Project, StreamSourceAwareLogicalPlan, TransformWithState, TransformWithStateInPySpark}
-import org.apache.spark.sql.catalyst.streaming.{StreamingRelationV2, WriteToStream}
+import org.apache.spark.sql.catalyst.streaming.{FlowAssigned, StreamingRelationV2, StreamingSourceIdentifyingName, Unassigned, UserProvided, WriteToStream}
 import org.apache.spark.sql.catalyst.trees.TreePattern.CURRENT_LIKE
 import org.apache.spark.sql.catalyst.util.truncatedString
 import org.apache.spark.sql.classic.{Dataset, SparkSession}
@@ -102,7 +102,7 @@ class MicroBatchExecution(
   @volatile protected var sources: Seq[SparkDataStream] = Seq.empty
 
   // Source ID mapping for OffsetMap support
-  // Using index as sourceId initially, can be extended to support user-provided names
+  // Maps source ID (name or sequential index) to the source instance
   // This is initialized in the same path as the sources Seq (defined above) and is used
   // in the same way, when OffsetLog v2 is used.
   @volatile protected var sourceIdMap: Map[String, SparkDataStream] = Map.empty
@@ -172,6 +172,25 @@ class MicroBatchExecution(
     val toExecutionRelationMap = MutableMap[StreamingRelation, StreamingExecutionRelation]()
     val v2ToExecutionRelationMap = MutableMap[StreamingRelationV2, StreamingExecutionRelation]()
     val v2ToRelationMap = MutableMap[StreamingRelationV2, StreamingDataSourceV2ScanRelation]()
+
+    // Track the identifying name for each source to build the sourceIdMap
+    val sourceToIdentifyingNameMap = MutableMap[SparkDataStream, StreamingSourceIdentifyingName]()
+
+    /**
+     * Helper method to get the source ID for checkpoint metadata paths.
+     * Uses the source name when available (UserProvided or FlowAssigned),
+     * otherwise falls back to sequential ID for backward compatibility.
+     */
+    def getSourceId(
+        sourceIdentifyingName: StreamingSourceIdentifyingName,
+        fallbackId: Long): String = {
+      sourceIdentifyingName match {
+        case UserProvided(name) => name
+        case FlowAssigned(name) => name
+        case Unassigned => fallbackId.toString
+      }
+    }
+
     // We transform each distinct streaming relation into a StreamingExecutionRelation, keeping a
     // map as we go to ensure each identical relation gets the same StreamingExecutionRelation
     // object. For each microbatch, the StreamingExecutionRelation will be replaced with a logical
@@ -189,8 +208,10 @@ class MicroBatchExecution(
           dataSourceV1, sourceName, output, sourceIdentifyingName) =>
         toExecutionRelationMap.getOrElseUpdate(streamingRelation, {
           // Materialize source to avoid creating it in every batch
-          val metadataPath = s"$resolvedCheckpointRoot/sources/$nextSourceId"
+          val sourceId = getSourceId(sourceIdentifyingName, nextSourceId)
+          val metadataPath = s"$resolvedCheckpointRoot/sources/$sourceId"
           val source = dataSourceV1.createSource(metadataPath)
+          sourceToIdentifyingNameMap.put(source, sourceIdentifyingName)
           nextSourceId += 1
           logInfo(log"Using Source [${MDC(LogKeys.STREAMING_SOURCE, source)}] " +
             log"from DataSourceV1 named '${MDC(LogKeys.STREAMING_DATA_SOURCE_NAME, sourceName)}' " +
@@ -206,7 +227,8 @@ class MicroBatchExecution(
         if (!v2Disabled && table.supports(TableCapability.MICRO_BATCH_READ)) {
           v2ToRelationMap.getOrElseUpdate(s, {
             // Materialize source to avoid creating it in every batch
-            val metadataPath = s"$resolvedCheckpointRoot/sources/$nextSourceId"
+            val sourceId = getSourceId(sourceIdentifyingName, nextSourceId)
+            val metadataPath = s"$resolvedCheckpointRoot/sources/$sourceId"
             nextSourceId += 1
             logInfo(log"Reading table [${MDC(LogKeys.STREAMING_TABLE, table)}] " +
               log"from DataSourceV2 named '${MDC(LogKeys.STREAMING_DATA_SOURCE_NAME, srcName)}' " +
@@ -214,6 +236,7 @@ class MicroBatchExecution(
             // TODO: operator pushdown.
             val scan = table.newScanBuilder(options).build()
             val stream = scan.toMicroBatchStream(metadataPath)
+            sourceToIdentifyingNameMap.put(stream, sourceIdentifyingName)
             val relation = StreamingDataSourceV2Relation(
                 table,
                 output,
@@ -234,9 +257,11 @@ class MicroBatchExecution(
         } else {
           v2ToExecutionRelationMap.getOrElseUpdate(s, {
             // Materialize source to avoid creating it in every batch
-            val metadataPath = s"$resolvedCheckpointRoot/sources/$nextSourceId"
+            val sourceId = getSourceId(sourceIdentifyingName, nextSourceId)
+            val metadataPath = s"$resolvedCheckpointRoot/sources/$sourceId"
             val source =
               v1.get.asInstanceOf[StreamingRelation].dataSource.createSource(metadataPath)
+            sourceToIdentifyingNameMap.put(source, sourceIdentifyingName)
             nextSourceId += 1
             logInfo(log"Using Source [${MDC(LogKeys.STREAMING_SOURCE, source)}] from " +
               log"DataSourceV2 named '${MDC(LogKeys.STREAMING_DATA_SOURCE_NAME, srcName)}' " +
@@ -255,8 +280,15 @@ class MicroBatchExecution(
     }
 
     // Create source ID mapping for OffsetMap support
+    // Use source names when available, otherwise fall back to sequential indices
     sourceIdMap = sources.zipWithIndex.map {
-      case (source, index) => index.toString -> source
+      case (source, index) =>
+        val sourceId = sourceToIdentifyingNameMap.get(source) match {
+          case Some(UserProvided(name)) => name
+          case Some(FlowAssigned(name)) => name
+          case _ => index.toString
+        }
+        sourceId -> source
     }.toMap
 
     // Inform the source if it is in real time mode
