@@ -162,8 +162,7 @@ class SequentialUnionManager(
     SequentialUnionOffset(
       activeSourceName = activeSourceName,
       completedSources = completedSources,
-      sourceNames = sourceNames,
-      version = 1
+      sourceNames = sourceNames
     )
   }
 
