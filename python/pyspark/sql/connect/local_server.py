@@ -52,7 +52,26 @@ import time
 from typing import Any
 
 
-def _write_discovery(path: str, host: str, port: int, token: str, version: str) -> None:
+def _debug(message: str) -> None:
+    """Append a timestamped line to ``SPARK_LOCAL_CONNECT_SERVER_DEBUG_LOG``, when set.
+
+    The daemon runs detached with its stdio discarded, so this is the supported way to see
+    what phase it is in (or stuck in) when diagnosing a server that never became ready or
+    never shut down.
+    """
+    path = os.environ.get("SPARK_LOCAL_CONNECT_SERVER_DEBUG_LOG")
+    if not path:
+        return
+    try:
+        with open(path, "a") as f:
+            f.write("{:.3f} pid={} {}\n".format(time.time(), os.getpid(), message))
+    except OSError:
+        pass
+
+
+def _write_discovery(
+    path: str, host: str, port: int, token: str, version: str, fingerprint: str = None
+) -> None:
     """Atomically write the discovery file with ``0600`` perms (it holds the auth token)."""
     parent = os.path.dirname(path)
     if parent and not os.path.isdir(parent):
@@ -64,6 +83,8 @@ def _write_discovery(path: str, host: str, port: int, token: str, version: str) 
         "pid": os.getpid(),
         "spark_version": version,
     }
+    if fingerprint is not None:
+        payload["conf_fingerprint"] = fingerprint
     tmp = "{}.{}.tmp".format(path, os.getpid())
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
@@ -101,6 +122,78 @@ def _has_active_sessions(spark: Any) -> bool:
     return not service.sessionManager().listActiveSessions().isEmpty()
 
 
+def _run_warmup(spark: Any, port: int, token: str, should_stop: Any) -> None:
+    """JIT-warm the query paths with fixed synthetic queries before the first real run.
+
+    JIT and codegen caches are JVM-global, so warming them here removes most of the
+    first-query latency from the one user run this (pool-mode) server will serve -- without
+    any user code or state ever touching the JVM. The classic pass warms Catalyst and the
+    execution engine; the self-connect pass (best effort: it needs the Connect client deps)
+    warms the Connect planner, Arrow serialization and the gRPC path end to end. Warmup state
+    is session-local and released; the discovery file is published before warmup starts, so a
+    client in a hurry can still claim and use the server mid-warmup.
+
+    Shutdown safety: ``should_stop`` is consulted between steps, and the self-connect pass
+    runs in a bounded daemon thread. A single-use server can be claimed, used, and released
+    -- SIGTERMing this whole process group, JVM included -- while warmup is still running; a
+    Connect handshake against the dying JVM then blocks with no deadline, and on the main
+    thread it would wedge the daemon past its own stop flag forever (observed in testing as
+    an unkillable daemon holding a zombie JVM).
+    """
+    classic_queries = (
+        "SELECT 1",
+        "SELECT sum(id) AS s, count(1) AS c FROM range(100000)",
+        "SELECT x, count(*) AS c FROM (SELECT id % 7 AS x FROM range(100000)) GROUP BY x",
+    )
+    _debug("warmup: classic phase")
+    for query in classic_queries:
+        if should_stop():
+            return
+        try:
+            spark.sql(query).collect()
+        except Exception:
+            return
+    if should_stop():
+        return
+
+    def _connect_warmup() -> None:
+        try:
+            if token:
+                os.environ["SPARK_CONNECT_AUTHENTICATE_TOKEN"] = token
+            from pyspark.sql.connect.session import SparkSession as ConnectSession
+
+            client = ConnectSession(connection="sc://localhost:{}".format(port))
+            try:
+                client.sql("SELECT 1").collect()
+                client.range(100000).selectExpr("sum(id)").collect()
+            finally:
+                client.stop()
+        except Exception:
+            pass
+
+    import threading
+
+    _debug("warmup: connect phase")
+    thread = threading.Thread(target=_connect_warmup, name="connect-warmup", daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 60
+    while thread.is_alive() and time.monotonic() < deadline and not should_stop():
+        thread.join(timeout=0.5)
+
+
+def _jvm_process_dead(spark: Any) -> bool:
+    """Whether the child JVM process has already exited (its py4j Popen has a return code).
+
+    When the JVM is gone the active-session probe can only fail, and failing open would keep
+    this daemon alive forever; a dead JVM always means shut down.
+    """
+    try:
+        proc = spark.sparkContext._gateway.proc
+        return proc is not None and proc.poll() is not None
+    except Exception:
+        return False
+
+
 def _bound_port(spark: Any, requested_port: int) -> int:
     """Return the port the Connect server actually bound (``requested_port`` may have been 0)."""
     jvm = spark.sparkContext._jvm
@@ -132,6 +225,24 @@ def main() -> None:
         help="seconds with no active session after which the server self-terminates; <=0 disables",
     )
     parser.add_argument("--poll-interval", type=float, default=60.0)
+    parser.add_argument(
+        "--fingerprint",
+        default=None,
+        help="opaque identity of the start-up confs this server was seeded with; echoed into the"
+        " discovery file so pool clients only claim servers matching their own confs",
+    )
+    parser.add_argument(
+        "--exit-after-use",
+        action="store_true",
+        help="single-use (pool) mode: self-terminate once at least one client session has been"
+        " observed and all sessions are gone again; the server never serves a second run",
+    )
+    parser.add_argument(
+        "--warmup",
+        action="store_true",
+        help="run fixed synthetic queries after start-up to JIT-warm the query paths, so the"
+        " first real query on this server is fast; no user code or state is involved",
+    )
     args = parser.parse_args()
 
     # Build a CLASSIC session: the connect-mode env vars would otherwise divert us into a client.
@@ -160,19 +271,19 @@ def main() -> None:
     )
     if args.token:
         builder = builder.config("spark.connect.authenticate.token", args.token)
+    _debug("starting SparkContext")
     spark = builder.getOrCreate()
+    _debug("SparkContext up")
 
     bound_port = _bound_port(spark, args.port)
-    _write_discovery(args.discovery, "localhost", bound_port, args.token, __version__)
-    print(
-        "SPARK-CONNECT-LOCAL-SERVER READY port={} pid={}".format(bound_port, os.getpid()),
-        flush=True,
-    )
 
+    # Install the shutdown handlers before the server becomes discoverable (and before any
+    # warmup), so a client that claims and releases us immediately can already stop us cleanly.
     stop = {"flag": False}
 
     def _handle(_signum: int, _frame: Any) -> None:
         stop["flag"] = True
+        _debug("signal {} received".format(_signum))
 
     signal.signal(signal.SIGTERM, _handle)
     try:
@@ -181,15 +292,33 @@ def main() -> None:
         # SIGINT may not be settable when not on the main thread on some platforms.
         pass
 
+    _write_discovery(
+        args.discovery, "localhost", bound_port, args.token, __version__, args.fingerprint
+    )
+    print(
+        "SPARK-CONNECT-LOCAL-SERVER READY port={} pid={}".format(bound_port, os.getpid()),
+        flush=True,
+    )
+
+    if args.warmup and not stop["flag"]:
+        _debug("warmup starting")
+        _run_warmup(spark, bound_port, args.token, lambda: stop["flag"])
+        _debug(
+            "warmup done; sigterm handler intact: {}".format(
+                signal.getsignal(signal.SIGTERM) is _handle
+            )
+        )
+
     idle_timeout = args.idle_timeout
     poll_interval = max(1.0, args.poll_interval)
     last_active = time.monotonic()
     last_poll = 0.0
+    seen_active = False
     try:
         # Sleep in short slices so a SIGTERM is observed promptly regardless of the poll interval.
         while not stop["flag"]:
             time.sleep(1.0)
-            if idle_timeout <= 0:
+            if idle_timeout <= 0 and not args.exit_after_use:
                 continue
             now = time.monotonic()
             if now - last_poll < poll_interval:
@@ -198,14 +327,30 @@ def main() -> None:
             try:
                 active = _has_active_sessions(spark)
             except Exception:
-                active = True  # fail open: never reap a server we cannot inspect
+                # Fail open only while the JVM is alive: an uninspectable but running server
+                # must never be reaped. A dead JVM can only ever fail inspection, so failing
+                # open would keep this daemon (and its zombie child) around forever.
+                if _jvm_process_dead(spark):
+                    _debug("JVM process is gone; exiting")
+                    break
+                active = True
             if active:
+                seen_active = True
                 last_active = now
-            elif now - last_active > idle_timeout:
+            elif args.exit_after_use and seen_active:
+                # Single-use mode: our one client has come and gone. This is only a backstop --
+                # the client normally SIGTERMs us on session.stop()/interpreter exit.
+                break
+            elif idle_timeout > 0 and now - last_active > idle_timeout:
                 break
     finally:
+        _debug("shutting down (stop flag={})".format(stop["flag"]))
         _remove_discovery_if_ours(args.discovery)
-        spark.stop()
+        try:
+            spark.stop()
+        except Exception:
+            pass  # the JVM may already be gone; exiting is what matters
+        _debug("shutdown complete")
 
 
 if __name__ == "__main__":
