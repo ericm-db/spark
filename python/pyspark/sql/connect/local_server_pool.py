@@ -18,9 +18,11 @@
 """Filesystem-backed state and lifecycle model for local Spark Connect server pools.
 
 This internal foundation owns member identity, directory locking, state-file access, claiming,
-reaping, and retirement. Server acquisition is layered on top in a follow-up change.
+reaping, retirement, and the attendant process that launches and supervises each member. Server
+acquisition is layered on top in a follow-up change.
 """
 
+import argparse
 import contextlib
 import hashlib
 import json
@@ -32,6 +34,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
+import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -560,7 +564,9 @@ _ATTENDANT_MODULE = "pyspark.sql.connect.local_server_pool"
 
 
 def _attendant_command(pool_dir: str, uid: str) -> List[str]:
-    """Command used by the acquisition layer to spawn a pool attendant."""
+    """Leading argv of a pool attendant for ``uid``. ``MemberAttendant.spawn`` appends its
+    launch arguments. ``_stop_own_launch`` matches this whole prefix; ``_is_pool_attendant``
+    matches its module, ``--attend``, and ``--uid``."""
     return [
         sys.executable,
         "-m",
@@ -681,7 +687,7 @@ class ServerPool:
         """Seconds an unclaimed member may sit before it is retired.
 
         Zero or a negative value disables idle retirement. Read the environment wherever
-        reaping runs so clients use the same source of truth.
+        reaping runs so clients and the attendants they spawn use the same source of truth.
         """
         try:
             return int(os.environ["SPARK_LOCAL_CONNECT_POOL_IDLE_TIMEOUT"])
@@ -987,6 +993,46 @@ class ServerPool:
             self._directory.remove(pending_path)
         self._directory.remove(self._directory.conf_path(uid))
 
+    def publish(self, uid: str, data: Dict[str, Any]) -> bool:
+        """Publish a booted server as ready to claim, consuming its launch's pending marker and
+        conf seed. ``False`` when the calling attendant no longer owns the launch.
+
+        Only the attendant still recorded in the pending marker may publish: the janitor can
+        withdraw a launch that looks hung (for example across a suspend) while it is still
+        booting, and publishing then would resurrect a member the pool already gave up on.
+        Such a server is withdrawn instead. The caller holds the directory lock.
+        """
+        member = PoolMember(data)
+        pending_path = self._directory.pending_path(uid)
+        owner = PendingState.attendant_pid_from_data(self._directory.read_json(pending_path))
+        if owner != os.getpid():
+            self.withdraw_launched_server(uid, member.pid, member.process_start_id)
+            self._directory.remove(self._directory.conf_path(uid))
+            return False
+        self._directory.write_json(self._directory.server_path(uid), data)
+        self._directory.remove(pending_path)
+        self._directory.remove(self._directory.conf_path(uid))
+        return True
+
+    def withdraw_launched_server(self, uid: str, pid: int, process_start_id: str) -> None:
+        """Stop a booted server that will not be published, and track it until it is gone.
+
+        Retiring it lets :meth:`_reap_retired` escalate if the JVM hangs. A retired record left
+        by an earlier abort already owns that launch's server; otherwise, when no state can be
+        written, fall back to a verified direct kill. The caller holds the directory lock.
+        """
+        if "retired" not in self._directory.states(uid):
+            server_path = self._directory.server_path(uid)
+            try:
+                self._directory.write_json(
+                    server_path, {"pid": pid, "process_start_id": process_start_id}
+                )
+                self._retire(server_path, pid, process_start_id, failed_launch=True)
+                return
+            except OSError:
+                pass
+        self._signal_server(pid, process_start_id, signal.SIGKILL)
+
     def _stop_own_launch(
         self, uid: str, pending_path: Optional[str], server_pid: Optional[int]
     ) -> None:
@@ -1228,3 +1274,249 @@ def release_pooled_local_connect_server() -> None:
         ServerPool(directory).release(member)
         if _claimed_member is member:
             _claimed_member = None
+
+
+class MemberAttendant:
+    """Boots one pool member, publishes it, and supervises it until it is gone.
+
+    Runs detached from the spawning client (``--attend``). Every phase is appended to
+    ``member-<uid>/attendant.log`` so a member that misbehaved can be debugged after the
+    fact. A failed boot reaps whatever half-started server spark-daemon.sh recorded and
+    withdraws the launch's bookkeeping, so refills stop counting it.
+    """
+
+    # How often an attendant applies the reaping rules to its member. Each pass holds the
+    # pool-wide lock and probes the server, so polling is far coarser than the lifecycle events
+    # it detects; the idle timeout defaults to 30 minutes.
+    _SUPERVISE_INTERVAL_SECONDS = 10
+
+    # Attendants this process spawned and has not reaped. An exited attendant stays a zombie
+    # until its parent reaps it, and the reaping rules see a zombie-led process group as a live
+    # launch, so the pool would wait out the launch timeout instead of relaunching it.
+    _children: List["subprocess.Popen"] = []
+
+    @classmethod
+    def reap_exited(cls) -> None:
+        """Reap attendants this process spawned that have exited."""
+        cls._children = [proc for proc in cls._children if proc.poll() is None]
+
+    @classmethod
+    def spawn(cls, directory: PoolDirectory, master: str, seed_conf: Dict[str, Any]) -> None:
+        """Start one detached attendant and publish its in-flight launch.
+
+        ``seed_conf`` is the startup configuration from ``startup_seed_conf``; the member's
+        fingerprint is derived from it here so the two cannot disagree. Callers hold
+        ``directory``'s lock, so another refill sees the pending marker before it can start a
+        duplicate launch for the same pool complement.
+        """
+        cls.reap_exited()
+        fingerprint = pool_fingerprint(master, seed_conf)
+        uid = uuid.uuid4().hex[:12]
+        directory.write_json(directory.conf_path(uid), seed_conf)
+        # The shared prefix is what the reaping rules match to recognize this attendant.
+        cmd = _attendant_command(directory.path, uid) + [
+            "--master",
+            master,
+            "--fingerprint",
+            fingerprint,
+        ]
+        env = dict(os.environ)
+        # The attendant must neither see this client's Connect mode nor inherit its auth
+        # token: each member gets its own token from LocalConnectServer.
+        for var in (
+            "SPARK_REMOTE",
+            "SPARK_LOCAL_REMOTE",
+            "SPARK_CONNECT_MODE_ENABLED",
+            "SPARK_CONNECT_AUTHENTICATE_TOKEN",
+        ):
+            env.pop(var, None)
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError:
+            directory.remove(directory.conf_path(uid))
+            raise
+        cls._children.append(proc)
+        try:
+            directory.write_json(
+                directory.pending_path(uid),
+                {"attendant_pid": proc.pid, "created": time.time(), "fingerprint": fingerprint},
+            )
+        except BaseException:
+            # Without a pending marker nothing would ever reap this launch. The attendant is
+            # this process's unreaped child and leads its own session, so its group id cannot
+            # have been reused.
+            with contextlib.suppress(OSError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()
+            directory.remove(directory.conf_path(uid))
+            raise
+
+    def __init__(self, directory: PoolDirectory, uid: str, master: str, fingerprint: str):
+        self._directory = directory
+        self._pool = ServerPool(directory)
+        self._uid = uid
+        self._master = master
+        self._fingerprint = fingerprint
+        self._member_dir = directory.member_dir(uid)
+
+    def run(self) -> int:
+        os.makedirs(self._member_dir, mode=0o700, exist_ok=True)
+        try:
+            member = self._boot()
+            if member is None:
+                # A server this launch started but did not publish is retired; stay until the
+                # retirement rules have stopped it, since no client may ever run them.
+                self._await_retirement()
+                return 1
+            self._log("supervising")
+            # Supervision ends once nothing of the member remains, including this log's
+            # directory.
+            self._supervise(member)
+            return 0
+        except BaseException:
+            # The attendant's own output goes nowhere; leave the reason where the logs are.
+            self._log(f"attendant failed: {traceback.format_exc()}")
+            raise
+
+    def _log(self, message: str) -> None:
+        """Append one line to the member's log. Logging is diagnostic only, so it never fails
+        the lifecycle, for example once the member directory has been collected."""
+        line = " ".join(message.split())
+        with contextlib.suppress(OSError):
+            with open(os.path.join(self._member_dir, "attendant.log"), "a") as f:
+                f.write(f"{time.time():.3f} {line}\n")
+
+    def _boot(self) -> Optional[PoolMember]:
+        """Start the server on a fresh ephemeral port and publish it as ready-to-claim.
+        Publishing consumes the launch's pending marker and conf seed: from that moment the
+        member counts as a server, and this process's job shifts to supervising it."""
+        from pyspark.sql.connect.local_server import LocalConnectServer
+
+        with self._directory:
+            seed_conf = self._directory.read_json(self._directory.conf_path(self._uid))
+            if seed_conf is None:
+                # Booting without the seeded confs would publish a server whose confs do not
+                # match the fingerprint clients select it by.
+                self._log("boot failed: startup conf is missing or unreadable")
+                self._pool.abort_launch(self._uid)
+                return None
+        discovery = Discovery(os.path.join(self._member_dir, "connect-local.json"))
+        self._log(f"booting master={self._master}")
+        try:
+            with discovery:
+                server = LocalConnectServer(discovery)
+                server.start(
+                    self._master,
+                    {},
+                    use_ephemeral_port=True,
+                    seed_conf=seed_conf,
+                )
+                data = discovery.load()
+            if data is None:
+                raise RuntimeError("the launch did not record a discovery file")
+            process_start_id = self._pool._process_start_id(data["pid"])
+            if process_start_id is None:
+                raise RuntimeError(f"could not identify launched server pid {data['pid']}")
+            data["process_start_id"] = process_start_id
+        except Exception as e:
+            self._log(f"boot failed: {type(e).__name__}: {e}")
+            with self._directory:
+                self._pool.abort_launch(self._uid)
+            return None
+        data["fingerprint"] = self._fingerprint
+        data["created"] = time.time()
+        with self._directory:
+            try:
+                published = self._pool.publish(self._uid, data)
+            except Exception as e:
+                # Never leave a running server without a record, e.g. when the disk is full.
+                self._log(f"publication failed: {type(e).__name__}: {e}")
+                self._pool.withdraw_launched_server(self._uid, data["pid"], process_start_id)
+                self._pool.abort_launch(self._uid)
+                return None
+        if not published:
+            self._log(f"launch withdrawn before publication; retired pid={data['pid']}")
+            return None
+        self._log(f"published pid={data['pid']} port={data['port']}")
+        return PoolMember(data)
+
+    def _await_retirement(self) -> None:
+        """Apply the reaping rules until no retired server of this launch remains, so a
+        withdrawn launch's JVM that ignores SIGTERM is still hard-killed. The member directory
+        is left for the age-based collection, keeping the failed launch's logs."""
+        while True:
+            try:
+                with self._directory:
+                    self._pool.reap(self._uid)
+                    if "retired" not in self._directory.states(self._uid):
+                        return
+            except OSError as e:
+                self._log(f"retirement pass failed: {type(e).__name__}: {e}")
+            time.sleep(self._SUPERVISE_INTERVAL_SECONDS)
+
+    def _supervise(self, member: PoolMember) -> None:
+        """Watch this member until nothing of it remains, applying the pool's reaping rules.
+
+        This is what lets an idle machine drain to zero servers with no further Spark run: the
+        idle timeout, dead-client cleanup, and hard-kill escalation all fire from here even
+        when no client ever runs again.
+        """
+        while True:
+            try:
+                with self._directory:
+                    if self._pool.reap(self._uid):
+                        return
+                    states = set(self._directory.states(self._uid))
+                    server_gone = (
+                        self._pool._same_process_generation(member.pid, member.process_start_id)
+                        is False
+                    )
+                    if states <= {"member"} and server_gone:
+                        # Another process's janitor already tore the member down; only the
+                        # young member directory remains. The generation check keeps a recycled
+                        # server pid from holding this loop open forever.
+                        self._directory.remove_member_dir(self._uid)
+                        return
+            except OSError as e:
+                # The reaping rules are idempotent, so a transient I/O failure (a full disk, a
+                # briefly unreadable state file) is retried rather than ending supervision.
+                self._log(f"supervision pass failed: {type(e).__name__}: {e}")
+            time.sleep(self._SUPERVISE_INTERVAL_SECONDS)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Run an internal attendant for the opt-in local Spark Connect server pool."
+    )
+    # Internal entry point spawned by ServerPool.
+    parser.add_argument("--attend", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--pool-dir", help=argparse.SUPPRESS)
+    parser.add_argument("--uid", help=argparse.SUPPRESS)
+    parser.add_argument("--master", help=argparse.SUPPRESS)
+    parser.add_argument("--fingerprint", help=argparse.SUPPRESS)
+    args = parser.parse_args()
+
+    if args.attend:
+        if not (args.pool_dir and args.uid and args.master and args.fingerprint):
+            # Without --pool-dir the attendant would fall back to the default pool directory.
+            parser.error("--attend requires --pool-dir, --uid, --master, and --fingerprint")
+        if not PoolDirectory._is_uid(args.uid):
+            parser.error("--uid must be a lowercase hexadecimal member id")
+        attendant = MemberAttendant(
+            PoolDirectory(args.pool_dir), args.uid, args.master, args.fingerprint
+        )
+        sys.exit(attendant.run())
+    else:
+        parser.print_help(sys.stderr)
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()

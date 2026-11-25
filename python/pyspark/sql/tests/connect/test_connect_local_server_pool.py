@@ -16,6 +16,7 @@
 #
 
 import contextlib
+import io
 import os
 import shutil
 import signal
@@ -34,6 +35,7 @@ if should_test_connect:
     from pyspark.sql.connect.local_server import _SERVER_CLASS, _pid_alive
     from pyspark.sql.connect.local_server_pool import (
         _JVM_ENV_VARS,
+        MemberAttendant,
         PendingState,
         PoolDirectory,
         PoolMember,
@@ -121,6 +123,10 @@ def _wait_pid_dead(pid: int, timeout: float = 30.0) -> bool:
 _SAVED_ENV_KEYS = (
     "SPARK_LOCAL_CONNECT_POOL_DIR",
     "SPARK_LOCAL_CONNECT_POOL_IDLE_TIMEOUT",
+    "SPARK_CONNECT_AUTHENTICATE_TOKEN",
+    "SPARK_REMOTE",
+    "SPARK_LOCAL_REMOTE",
+    "SPARK_CONNECT_MODE_ENABLED",
     "PYSPARK_DRIVER_PYTHON",
     "PYSPARK_PYTHON",
 )
@@ -148,9 +154,12 @@ class LocalConnectServerPoolUnitTests(unittest.TestCase):
         self._procs = []
         self._launch_groups = []
         local_server_pool._claimed_member = None
+        self._saved_children = MemberAttendant._children
+        MemberAttendant._children = []
 
     def tearDown(self) -> None:
         local_server_pool._claimed_member = None
+        MemberAttendant._children = self._saved_children
         for pgid, child_pid, start_id in self._launch_groups:
             if ServerPool._same_process_generation(child_pid, start_id) is True:
                 with contextlib.suppress(OSError):
@@ -1990,6 +1999,303 @@ class LocalConnectServerPoolUnitTests(unittest.TestCase):
         # A concurrent janitor already completed the claim -> retired transition.
         self._pool.release(member)
         self.assertEqual(set(self._states("a1a2")), {"retired"})
+
+    # Attendant: one member's launch, publication, and supervision.
+
+    def _pending_launch(self, uid: str, seed_conf: object = None) -> None:
+        with self._directory as directory:
+            if seed_conf is not None:
+                directory.write_json(directory.conf_path(uid), seed_conf)
+            directory.write_json(
+                directory.pending_path(uid),
+                {"attendant_pid": os.getpid(), "created": time.time(), "fingerprint": "fp"},
+            )
+
+    def _member_attendant(self, uid: str) -> MemberAttendant:
+        # A separate PoolDirectory, as in the detached attendant process.
+        attendant = MemberAttendant(PoolDirectory(self._directory.path), uid, "local[2]", "fp")
+        os.makedirs(self._directory.member_dir(uid), exist_ok=True)
+        return attendant
+
+    def _boot_with(self, attendant: MemberAttendant, launched: dict, before_return=None):
+        """Boot ``attendant`` with a stand-in launch that records ``launched``."""
+        from pyspark.sql.connect.local_server import LocalConnectServer
+
+        def start(server, master, opts, **kwargs):
+            self.assertEqual(kwargs, {"use_ephemeral_port": True, "seed_conf": {"k": "v"}})
+            server._discovery.save(launched)
+            if before_return is not None:
+                before_return()
+
+        with mock.patch.object(LocalConnectServer, "start", autospec=True, side_effect=start):
+            return attendant._boot()
+
+    def _launched(self, pid: int) -> dict:
+        return {
+            "host": "localhost",
+            "port": 15030,
+            "token": "t",
+            "pid": pid,
+            "spark_version": __version__,
+        }
+
+    def test_spawn_records_a_recognizable_attendant_with_a_sanitized_environment(self) -> None:
+        from pyspark.sql.connect.local_server_pool import _attendant_command, pool_fingerprint
+
+        for var in (
+            "SPARK_REMOTE",
+            "SPARK_LOCAL_REMOTE",
+            "SPARK_CONNECT_MODE_ENABLED",
+            "SPARK_CONNECT_AUTHENTICATE_TOKEN",
+        ):
+            os.environ[var] = "client-value"
+        with mock.patch.object(local_server_pool.subprocess, "Popen") as popen:
+            popen.return_value.pid = 4242
+            with self._directory as directory:
+                MemberAttendant.spawn(directory, "local[2]", {"k": "v"})
+                ((uid, pending_path),) = directory.paths_of_kind("pending")
+                pending = directory.read_json(pending_path)
+                seed_conf = directory.read_json(directory.conf_path(uid))
+        cmd = popen.call_args.args[0]
+        kwargs = popen.call_args.kwargs
+        prefix = _attendant_command(self._directory.path, uid)
+        self.assertEqual(cmd[: len(prefix)], prefix)
+        fingerprint = pool_fingerprint("local[2]", {"k": "v"})
+        self.assertEqual(cmd[len(prefix) :], ["--master", "local[2]", "--fingerprint", fingerprint])
+        self.assertTrue(kwargs["start_new_session"])
+        self.assertEqual({k: v for k, v in kwargs["env"].items() if v == "client-value"}, {})
+        self.assertEqual(seed_conf, {"k": "v"})
+        self.assertEqual(pending["attendant_pid"], 4242)
+        self.assertEqual(pending["fingerprint"], fingerprint)
+        self.assertEqual(MemberAttendant._children, [popen.return_value])
+        # The reaping rules recognize the spawned command as this member's attendant.
+        with mock.patch.object(local_server_pool, "_process_command", return_value=" ".join(cmd)):
+            self.assertTrue(ServerPool._is_pool_attendant(4242, uid))
+            self.assertFalse(ServerPool._is_pool_attendant(4242, "0" + uid))
+
+    def test_spawn_withdraws_its_conf_when_the_attendant_cannot_start(self) -> None:
+        with mock.patch.object(local_server_pool.subprocess, "Popen", side_effect=OSError):
+            with self._directory as directory:
+                with self.assertRaises(OSError):
+                    MemberAttendant.spawn(directory, "local[2]", {})
+                self.assertEqual(directory.uids(), [])
+
+    def test_boot_publishes_the_server_and_consumes_the_launch(self) -> None:
+        server = self._live_process()
+        self._pending_launch("e44", {"k": "v"})
+        member = self._boot_with(self._member_attendant("e44"), self._launched(server.pid))
+        self.assertIsNotNone(member)
+        self.assertEqual(set(self._states("e44")), {"server", "member"})
+        with self._directory as directory:
+            record = directory.read_json(directory.server_path("e44"))
+        self.assertEqual(record["fingerprint"], "fp")
+        self.assertEqual(record["process_start_id"], ServerPool._process_start_id(server.pid))
+        self.assertEqual(PoolMember(record).pid, member.pid)
+
+    def test_boot_without_its_startup_conf_withdraws_the_launch(self) -> None:
+        from pyspark.sql.connect.local_server import LocalConnectServer
+
+        self._pending_launch("e45")
+        with mock.patch.object(LocalConnectServer, "start") as start:
+            self.assertIsNone(self._member_attendant("e45")._boot())
+        start.assert_not_called()
+        self.assertEqual(set(self._states("e45")), {"member"})
+
+    def test_boot_failure_withdraws_the_launch(self) -> None:
+        from pyspark.sql.connect.local_server import LocalConnectServer
+
+        self._pending_launch("e46", {"k": "v"})
+        attendant = self._member_attendant("e46")
+        with mock.patch.object(LocalConnectServer, "start", side_effect=RuntimeError("boom")):
+            self.assertIsNone(attendant._boot())
+        self.assertEqual(set(self._states("e46")), {"member"})
+        with open(os.path.join(self._directory.member_dir("e46"), "attendant.log")) as f:
+            self.assertIn("boot failed: RuntimeError: boom", f.read())
+
+    def test_boot_does_not_publish_a_launch_withdrawn_while_booting(self) -> None:
+        server = self._live_process()
+        self._pending_launch("e47", {"k": "v"})
+
+        def withdraw() -> None:
+            with self._directory as directory:
+                directory.remove(directory.pending_path("e47"))
+
+        member = self._boot_with(
+            self._member_attendant("e47"), self._launched(server.pid), withdraw
+        )
+        self.assertIsNone(member)
+        # The server is retired, not published, so the retirement rules escalate if it hangs.
+        self.assertEqual(set(self._states("e47")), {"retired", "member"})
+        with self._directory as directory:
+            retired = RetiredState.from_data(directory.read_json(directory.retired_path("e47")))
+        self.assertEqual(retired.pid, server.pid)
+        self.assertTrue(retired.failed_launch)
+        self.assertIsNotNone(server.wait(timeout=10))
+
+    def test_run_hard_kills_a_withdrawn_launch_that_ignores_sigterm(self) -> None:
+        from pyspark.sql.connect.local_server import LocalConnectServer
+
+        server = self._stubborn_process()
+        self._pending_launch("e53", {"k": "v"})
+        attendant = self._member_attendant("e53")
+
+        def start(server_handle, master, opts, **kwargs):
+            server_handle._discovery.save(self._launched(server.pid))
+            with self._directory as directory:
+                directory.remove(directory.pending_path("e53"))
+
+        # No client runs the reaping rules here, so the attendant itself must escalate.
+        with (
+            mock.patch.object(LocalConnectServer, "start", autospec=True, side_effect=start),
+            mock.patch.object(MemberAttendant, "_SUPERVISE_INTERVAL_SECONDS", 0.05),
+            mock.patch.object(ServerPool, "_RETIRE_KILL_AFTER_SECONDS", 0),
+        ):
+            self.assertEqual(attendant.run(), 1)
+        self.assertIsNotNone(server.wait(timeout=10))
+        # The failed launch's logs stay for the age-based collection.
+        self.assertEqual(set(self._states("e53")), {"member"})
+
+    def test_run_logs_an_unexpected_failure(self) -> None:
+        attendant = self._member_attendant("e54")
+        with mock.patch.object(MemberAttendant, "_boot", side_effect=ValueError("bug")):
+            with self.assertRaises(ValueError):
+                attendant.run()
+        with open(os.path.join(self._directory.member_dir("e54"), "attendant.log")) as f:
+            log = f.read()
+        self.assertIn("attendant failed: Traceback", log)
+        self.assertIn("ValueError: bug", log)
+
+    def test_spawn_stops_the_attendant_when_its_launch_cannot_be_recorded(self) -> None:
+        write_json = PoolDirectory.write_json
+
+        def no_pending(directory, path, data):
+            if os.path.basename(path).startswith("pending-"):
+                raise OSError("state unavailable")
+            write_json(directory, path, data)
+
+        sleeper = [sys.executable, "-c", "import time; time.sleep(60)"]
+        with (
+            mock.patch.object(local_server_pool, "_attendant_command", return_value=sleeper),
+            mock.patch.object(PoolDirectory, "write_json", no_pending),
+        ):
+            with self._directory as directory:
+                with self.assertRaises(OSError):
+                    MemberAttendant.spawn(directory, "local[2]", {})
+                self.assertEqual(directory.uids(), [])
+        (attendant,) = MemberAttendant._children
+        self.assertIsNotNone(attendant.returncode)
+
+    def test_boot_publication_failure_stops_the_server_and_withdraws_the_launch(self) -> None:
+        import errno
+
+        server = self._live_process()
+        self._pending_launch("e50", {"k": "v"})
+        attendant = self._member_attendant("e50")
+        write_json = PoolDirectory.write_json
+
+        def disk_full_for_server_state(directory, path, data):
+            if os.path.basename(path) == "server-e50.json":
+                raise OSError(errno.ENOSPC, "No space left on device")
+            write_json(directory, path, data)
+
+        with mock.patch.object(PoolDirectory, "write_json", disk_full_for_server_state):
+            self.assertIsNone(self._boot_with(attendant, self._launched(server.pid)))
+        self.assertIsNotNone(server.wait(timeout=10))
+        self.assertEqual(set(self._states("e50")), {"member"})
+        with open(os.path.join(self._directory.member_dir("e50"), "attendant.log")) as f:
+            self.assertIn("publication failed: OSError", f.read())
+
+    def test_run_boots_supervises_and_drains_a_member(self) -> None:
+        from pyspark.sql.connect.local_server import LocalConnectServer
+
+        server = self._live_process()
+        self._pending_launch("e51", {"k": "v"})
+        attendant = self._member_attendant("e51")
+
+        def start(server_handle, master, opts, **kwargs):
+            server_handle._discovery.save(self._launched(server.pid))
+
+        # Nothing listens on the recorded port, so the first supervision pass retires the
+        # member and later passes see the server exit and collect what remains.
+        with (
+            mock.patch.object(LocalConnectServer, "start", autospec=True, side_effect=start),
+            mock.patch.object(MemberAttendant, "_SUPERVISE_INTERVAL_SECONDS", 0.05),
+        ):
+            self.assertEqual(attendant.run(), 0)
+        self.assertIsNotNone(server.wait(timeout=10))
+        self.assertEqual(self._states("e51"), {})
+
+    def test_supervise_retries_a_failed_pass(self) -> None:
+        member = PoolMember(self._server_data(15033, os.getpid()))
+        attendant = self._member_attendant("e52")
+        with (
+            mock.patch.object(
+                ServerPool, "reap", side_effect=[OSError("state unavailable"), True]
+            ) as reap,
+            mock.patch.object(local_server_pool.time, "sleep") as sleep,
+        ):
+            attendant._supervise(member)
+        self.assertEqual(reap.call_count, 2)
+        sleep.assert_called_once_with(MemberAttendant._SUPERVISE_INTERVAL_SECONDS)
+        with open(os.path.join(self._directory.member_dir("e52"), "attendant.log")) as f:
+            self.assertIn("supervision pass failed: OSError: state unavailable", f.read())
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "reads /proc to observe zombies")
+    def test_reap_exited_collects_exited_attendants(self) -> None:
+        exited = subprocess.Popen([sys.executable, "-c", "pass"])
+        alive = self._live_process()
+        MemberAttendant._children = [exited, alive]
+
+        def state(pid: int) -> str:
+            with open(f"/proc/{pid}/stat") as f:
+                return f.read().rsplit(")", 1)[1].split()[0]
+
+        deadline = time.time() + 30
+        while state(exited.pid) != "Z" and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(state(exited.pid), "Z")
+        MemberAttendant.reap_exited()
+        self.assertEqual(MemberAttendant._children, [alive])
+        self.assertFalse(os.path.exists(f"/proc/{exited.pid}"))
+
+    def test_supervise_returns_once_the_member_is_gone(self) -> None:
+        server = self._live_process()
+        member = PoolMember(self._server_data(15031, server.pid))
+        attendant = self._member_attendant("e48")
+        server.kill()
+        server.wait(timeout=10)
+        # A second poll means supervision kept waiting on a member that is already gone.
+        keep_waiting = AssertionError("supervise kept waiting")
+        with mock.patch.object(local_server_pool.time, "sleep", side_effect=keep_waiting):
+            attendant._supervise(member)
+        self.assertEqual(self._states("e48"), {})
+
+    def test_supervise_does_not_wait_on_a_recycled_server_pid(self) -> None:
+        # The pid is alive, but as a different process generation than the published server.
+        member = PoolMember(self._server_data(15032, os.getpid(), process_start_id="old"))
+        attendant = self._member_attendant("e49")
+        # A second poll means supervision kept waiting on a member that is already gone.
+        keep_waiting = AssertionError("supervise kept waiting")
+        with mock.patch.object(local_server_pool.time, "sleep", side_effect=keep_waiting):
+            attendant._supervise(member)
+        self.assertEqual(self._states("e49"), {})
+
+    def test_attend_requires_valid_launch_arguments(self) -> None:
+        launch = ["--master", "local[2]", "--fingerprint", "fp"]
+        for argv in (
+            ["--attend", "--pool-dir", self._directory.path],
+            ["--attend", "--pool-dir", self._directory.path, "--uid", "../x"] + launch,
+        ):
+            with (
+                self.subTest(argv=argv),
+                mock.patch.object(sys, "argv", ["local_server_pool"] + argv),
+                mock.patch.object(MemberAttendant, "run") as run,
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                with self.assertRaises(SystemExit) as ctx:
+                    local_server_pool.main()
+                self.assertEqual(ctx.exception.code, 2)
+                run.assert_not_called()
 
 
 if __name__ == "__main__":
